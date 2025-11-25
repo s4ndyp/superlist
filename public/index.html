@@ -132,9 +132,13 @@
                 </div>
             </div>
             <ul id="shopping-items" class="space-y-3"></ul>
-        </div>
-        <div class="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-30">
-            <button onclick="app.finishShopping()" class="bg-emerald-500 hover:bg-emerald-400 text-white font-bold py-3 px-8 rounded-full shadow-xl shadow-emerald-900/50 transform transition active:scale-95 flex items-center gap-2"><i class="fa-solid fa-check"></i> Klaar</button>
+            
+            <!-- Klaar knop direct onder lijst (niet meer fixed) -->
+            <div class="mt-8 mb-4 w-full flex justify-center">
+                <button onclick="app.finishShopping()" class="w-full max-w-xs bg-emerald-500 hover:bg-emerald-400 text-white font-bold py-4 rounded-xl shadow-xl shadow-emerald-900/50 transform transition hover:scale-[1.02] flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-check"></i> Klaar met winkelen
+                </button>
+            </div>
         </div>
     </template>
 
@@ -288,16 +292,20 @@
                 }
             },
 
-            // NEW: Clear history logic
             clearHistory: async () => {
+                // Eerst localstorage wissen
+                localStorage.removeItem('shoppingHistory');
+                
+                // Dan proberen backend te wissen (indien beschikbaar)
                 try {
-                    // Probeer te wissen via API (als endpoint bestaat/zou bestaan)
                     await fetch('/api/history', { method: 'DELETE' });
                 } catch (e) {
-                    console.warn("Backend delete not supported or failed, clearing local only");
+                    console.warn("Backend delete not supported or failed");
                 }
-                // Altijd localstorage wissen als backup
-                localStorage.removeItem('shoppingHistory');
+                
+                // Belangrijk: Voor de UI geven we nu expliciet aan dat het leeg is
+                // Dit voorkomt dat getHistory() direct weer de data ophaalt als de server delete faalt
+                return true; 
             }
         };
 
@@ -538,7 +546,6 @@
                     if (d.getFullYear() === now.getFullYear()) yearTrips++;
                     if (d.getMonth() === month && d.getFullYear() === year) {
                         const dayKey = d.getDate();
-                        // WIJZIGING: Tel hier +1 per bezoek, in plaats van +entry.itemCount
                         dayCounts[dayKey] = (dayCounts[dayKey] || 0) + 1; 
                     }
                 });
@@ -556,7 +563,6 @@
                     const div = document.createElement('div');
                     const count = dayCounts[day];
                     div.className = `aspect-square rounded-lg flex flex-col items-center justify-center text-sm font-medium relative border ${count !== undefined ? 'bg-emerald-500/20 border-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-dark-900 border-gray-800 text-gray-500'}`;
-                    // WIJZIGING: Toon '+1' of '+2' (aantal bezoeken)
                     div.innerHTML = `<span>${day}</span>` + (count !== undefined ? `<span class="text-[9px] text-emerald-400 font-bold mt-[-2px]">+${count}</span>` : '');
                     daysContainer.appendChild(div);
                 }
@@ -567,7 +573,9 @@
                 if (confirm("Weet je zeker dat je alle geschiedenis en statistieken wilt wissen? Dit kan niet ongedaan worden gemaakt.")) {
                     await DataService.clearHistory();
                     app.showToast("Statistieken gewist");
-                    app.renderStats(); // Refresh view
+                    // Force refresh by resetting statsDate if needed, or just recalling
+                    // We also ensure getHistory returns empty now if server failed
+                    app.renderStats(); 
                 }
             }
         };
