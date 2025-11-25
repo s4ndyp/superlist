@@ -9,7 +9,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3796/3796063.png">
-    <link rel="manifest" id="my-manifest">
+    
+    <!-- PWA MANIFEST LINK (Verwijst nu naar het bestand public/manifest.json) -->
+    <link rel="manifest" href="manifest.json">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -31,33 +33,6 @@
                 }
             }
         }
-        
-        // UPDATE: Android vereist expliciet 192x192 én 512x512 iconen
-        const manifest = {
-            name: "SuperLijst", 
-            short_name: "SuperLijst", 
-            start_url: "./index.html", // Expliciet naar index wijzen
-            display: "standalone",
-            background_color: "#0f172a", 
-            theme_color: "#0f172a", 
-            orientation: "portrait",
-            icons: [
-                { 
-                    src: "https://cdn-icons-png.flaticon.com/512/3796/3796063.png", 
-                    sizes: "192x192", 
-                    type: "image/png",
-                    purpose: "any maskable"
-                },
-                { 
-                    src: "https://cdn-icons-png.flaticon.com/512/3796/3796063.png", 
-                    sizes: "512x512", 
-                    type: "image/png",
-                    purpose: "any maskable"
-                }
-            ]
-        };
-        const manifestURL = 'data:application/manifest+json;base64,' + btoa(JSON.stringify(manifest));
-        window.addEventListener('load', () => document.querySelector('#my-manifest').setAttribute('href', manifestURL));
     </script>
 
     <style>
@@ -378,6 +353,7 @@
                 const visiblePredefined = DataService.getPredefinedLists();
                 visiblePredefined.forEach(list => predefinedContainer.appendChild(app.createListCard(list, false)));
 
+                // Fetch data (will use Hybrid Service)
                 const savedLists = await DataService.getSavedLists();
                 
                 if (savedLists.length > 0) {
