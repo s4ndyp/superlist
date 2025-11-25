@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SuperLijst</title>
+    
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3796/3796063.png">
+    <link rel="manifest" id="my-manifest">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        dark: { 900: '#0f172a', 800: '#1e293b', 700: '#334155' },
+                        accent: { 500: '#10b981', 600: '#059669' }
+                    },
+                    animation: { 'fade-in': 'fadeIn 0.3s ease-out', 'slide-up': 'slideUp 0.3s ease-out' },
+                    keyframes: {
+                        fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
+                        slideUp: { '0%': { transform: 'translateY(20px)', opacity: '0' }, '100%': { transform: 'translateY(0)', opacity: '1' } }
+                    }
+                }
+            }
+        }
+        
+        const manifest = {
+            name: "SuperLijst", short_name: "SuperLijst", start_url: ".", display: "standalone",
+            background_color: "#0f172a", theme_color: "#0f172a", orientation: "portrait",
+            icons: [{ src: "https://cdn-icons-png.flaticon.com/512/3796/3796063.png", sizes: "512x512", type: "image/png" }]
+        };
+        const manifestURL = 'data:application/manifest+json;base64,' + btoa(JSON.stringify(manifest));
+        window.addEventListener('load', () => document.querySelector('#my-manifest').setAttribute('href', manifestURL));
+    </script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        .sortable-ghost { opacity: 0.4; background: #334155; }
+        .sortable-drag { cursor: grabbing; }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.5rem; }
+    </style>
+</head>
+<body class="bg-dark-900 text-slate-100 min-h-screen flex flex-col items-center overflow-hidden">
+
+    <div id="app" class="w-full max-w-md h-[100dvh] bg-dark-900 shadow-2xl relative flex flex-col">
+        <header class="p-4 bg-dark-800/90 backdrop-blur-md z-20 border-b border-gray-700/50 flex justify-between items-center shrink-0">
+            <h1 id="header-title" class="text-xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-500 bg-clip-text text-transparent">SuperLijst</h1>
+            <div id="header-actions" class="flex gap-3"></div>
+        </header>
+
+        <main id="main-content" class="flex-grow p-4 overflow-y-auto pb-32"></main>
+        <div id="notification-container" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-11/12 max-w-sm z-50 flex flex-col gap-2 pointer-events-none"></div>
+    </div>
+
+    <!-- TEMPLATES -->
+    <template id="tpl-dashboard">
+        <div class="space-y-6 animate-fade-in pb-10">
+            <div>
+                <h2 class="text-xs uppercase tracking-wider text-gray-500 font-bold mb-3 pl-1">Sjablonen</h2>
+                <div id="predefined-list-container" class="grid grid-cols-1 gap-3"></div>
+            </div>
+            <div id="saved-section" class="hidden">
+                <h2 class="text-xs uppercase tracking-wider text-gray-500 font-bold mb-3 pl-1">Mijn Lijsten</h2>
+                <div id="saved-list-container" class="grid grid-cols-1 gap-3"></div>
+            </div>
+            <button onclick="app.startEmpty()" class="w-full py-4 border-2 border-dashed border-gray-700 rounded-xl text-gray-400 hover:text-emerald-400 hover:border-emerald-500/50 hover:bg-dark-800 transition flex items-center justify-center gap-2 group">
+                <div class="w-8 h-8 rounded-full bg-dark-800 group-hover:bg-emerald-500/20 flex items-center justify-center transition"><i class="fa-solid fa-plus"></i></div>
+                <span class="font-medium">Nieuwe lege lijst</span>
+            </button>
+        </div>
+    </template>
+
+    <template id="tpl-editor">
+        <div class="flex flex-col h-full animate-fade-in">
+            <div class="mb-6 sticky top-0 bg-dark-900 z-10 py-2">
+                <label class="text-xs text-gray-500 uppercase font-bold ml-1">Lijst Naam</label>
+                <input type="text" id="list-name-input" class="w-full bg-transparent text-2xl font-bold border-b border-gray-700 focus:border-emerald-500 outline-none py-2 text-white placeholder-gray-600 transition-colors" placeholder="Bijv. Weekend Boodschappen">
+            </div>
+            <ul id="editor-items" class="space-y-2 mb-6 min-h-[50px]"></ul>
+            <div class="h-24"></div>
+            <div class="absolute bottom-0 left-0 right-0 bg-dark-900 border-t border-gray-800 p-4 pb-6">
+                <div class="flex gap-2 mb-4">
+                    <div class="relative flex-grow">
+                        <input type="text" id="new-item-input" class="w-full bg-dark-800 rounded-xl px-4 py-3 pl-4 pr-10 outline-none focus:ring-2 focus:ring-emerald-500/50 text-white placeholder-gray-500" placeholder="Product toevoegen..." onkeypress="if(event.key === 'Enter') app.addItem()">
+                        <button onclick="app.startVoiceInput()" class="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-emerald-400 transition" title="Spraakinvoer"><i id="mic-icon" class="fa-solid fa-microphone"></i></button>
+                    </div>
+                    <button onclick="app.addItem()" class="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl w-12 flex items-center justify-center transition shadow-lg shadow-emerald-900/50"><i class="fa-solid fa-plus"></i></button>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <button onclick="app.renderDashboard()" class="py-3 rounded-xl text-gray-400 hover:bg-dark-800 transition font-medium text-sm">Annuleren</button>
+                    <button onclick="app.saveAndShop()" class="bg-white text-dark-900 hover:bg-gray-200 font-bold py-3 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-sm"><i class="fa-solid fa-play"></i> Start Winkelen</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="tpl-shopping">
+        <div class="flex flex-col h-full animate-fade-in pb-24">
+            <div class="bg-dark-800/50 p-4 rounded-xl mb-6 border border-gray-800">
+                <div class="flex justify-between items-end mb-2">
+                    <h2 id="shopping-title" class="text-lg font-bold text-white truncate pr-4">Lijst</h2>
+                    <span id="progress-text" class="text-sm text-emerald-400 font-mono font-bold">0%</span>
+                </div>
+                <div class="w-full h-2 bg-dark-900 rounded-full overflow-hidden">
+                    <div id="progress-bar" class="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500" style="width: 0%"></div>
+                </div>
+            </div>
+            <ul id="shopping-items" class="space-y-3"></ul>
+        </div>
+        <div class="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-30">
+            <button onclick="app.finishShopping()" class="bg-emerald-500 hover:bg-emerald-400 text-white font-bold py-3 px-8 rounded-full shadow-xl shadow-emerald-900/50 transform transition active:scale-95 flex items-center gap-2"><i class="fa-solid fa-check"></i> Klaar</button>
+        </div>
+    </template>
+
+    <template id="tpl-stats">
+        <div class="flex flex-col h-full animate-fade-in">
+            <div class="flex justify-between items-center mb-4">
+                <button onclick="app.changeStatMonth(-1)" class="p-2 text-gray-400 hover:text-white"><i class="fa-solid fa-chevron-left"></i></button>
+                <h2 id="stats-month-year" class="text-lg font-bold text-white capitalize"></h2>
+                <button onclick="app.changeStatMonth(1)" class="p-2 text-gray-400 hover:text-white"><i class="fa-solid fa-chevron-right"></i></button>
+            </div>
+            <div class="bg-dark-800 p-4 rounded-xl border border-gray-800 mb-6">
+                <div class="calendar-grid mb-2">
+                    <div class="text-center text-xs text-gray-500 font-bold">ma</div><div class="text-center text-xs text-gray-500 font-bold">di</div><div class="text-center text-xs text-gray-500 font-bold">wo</div><div class="text-center text-xs text-gray-500 font-bold">do</div><div class="text-center text-xs text-gray-500 font-bold">vr</div><div class="text-center text-xs text-gray-500 font-bold">za</div><div class="text-center text-xs text-gray-500 font-bold">zo</div>
+                </div>
+                <div id="calendar-days" class="calendar-grid"></div>
+            </div>
+            <h3 class="text-xs uppercase tracking-wider text-gray-500 font-bold mb-3 pl-1">Overzicht</h3>
+            <div class="grid grid-cols-2 gap-4">
+                <div class="bg-dark-800 p-4 rounded-xl border border-gray-800 flex flex-col items-center justify-center">
+                    <span class="text-gray-400 text-xs mb-1">Deze maand</span>
+                    <span id="stat-count-month" class="text-3xl font-bold text-emerald-400">0</span>
+                    <span class="text-gray-500 text-[10px]">keer gewinkeld</span>
+                </div>
+                <div class="bg-dark-800 p-4 rounded-xl border border-gray-800 flex flex-col items-center justify-center">
+                    <span class="text-gray-400 text-xs mb-1">Dit jaar</span>
+                    <span id="stat-count-year" class="text-3xl font-bold text-cyan-400">0</span>
+                    <span class="text-gray-500 text-[10px]">keer gewinkeld</span>
+                </div>
+            </div>
+            <button onclick="app.renderDashboard()" class="mt-auto w-full py-3 text-gray-400 hover:text-white text-sm font-medium">Terug naar overzicht</button>
+        </div>
+    </template>
+
+    <script>
+        /**
+         * DATA SERVICE (HYBRID: API FIRST, LOCALSTORAGE BACKUP)
+         */
+        const DataService = {
+            _rawPredefined: [
+                { id: 'p1', name: 'Pasta Avond', items: [{ name: '1 zak Pasta Penne' }, { name: '1 pot Tomatensaus' }, { name: '500gr Rundergehakt' }, { name: 'Zakje Parmezaanse Kaas' }, { name: '2 st Courgette' }] },
+                { id: 'p2', name: 'Ontbijt', items: [{ name: '2 liter Melk' }, { name: '1 heel Brood' }, { name: 'Doosje Eieren' }, { name: 'Plakjes Kaas' }] }
+            ],
+
+            getPredefinedLists: () => {
+                const hidden = JSON.parse(localStorage.getItem('hiddenPredefined') || '[]');
+                return DataService._rawPredefined.filter(l => !hidden.includes(l.id));
+            },
+            deletePredefined: (id) => {
+                const hidden = JSON.parse(localStorage.getItem('hiddenPredefined') || '[]');
+                hidden.push(id);
+                localStorage.setItem('hiddenPredefined', JSON.stringify(hidden));
+            },
+            restorePredefined: (id) => {
+                let hidden = JSON.parse(localStorage.getItem('hiddenPredefined') || '[]');
+                hidden = hidden.filter(h => h !== id);
+                localStorage.setItem('hiddenPredefined', JSON.stringify(hidden));
+            },
+
+            // --- HYBRID API CALLS ---
+            // Tries Server API first, falls back to LocalStorage on error (e.g. Preview mode)
+
+            getSavedLists: async () => {
+                try {
+                    const response = await fetch('/api/lists');
+                    if (!response.ok) throw new Error('Network/Server error');
+                    return await response.json();
+                } catch (e) {
+                    console.warn("Backend niet beschikbaar, fallback naar LocalStorage", e);
+                    // LocalStorage Fallback (Migration included)
+                    const saved = localStorage.getItem('myLists');
+                    let lists = saved ? JSON.parse(saved) : [];
+                    lists.forEach(list => {
+                        list.items = list.items.map(item => {
+                            if (typeof item === 'string') return { name: item };
+                            if (item.qty || item.unit) {
+                                let prefix = '';
+                                if (item.qty && item.qty > 0) prefix += item.qty + ' ';
+                                if (item.unit) prefix += item.unit + ' ';
+                                const newName = (prefix + item.name).trim();
+                                return { name: newName };
+                            }
+                            return item;
+                        });
+                    });
+                    return lists;
+                }
+            },
+            
+            saveList: async (listObj) => {
+                try {
+                    await fetch('/api/lists', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(listObj)
+                    });
+                } catch (e) {
+                    console.warn("Backend niet beschikbaar, opslaan in LocalStorage");
+                    let lists = JSON.parse(localStorage.getItem('myLists') || '[]');
+                    const index = lists.findIndex(l => l.id === listObj.id);
+                    if (index >= 0) lists[index] = listObj;
+                    else lists.push(listObj);
+                    localStorage.setItem('myLists', JSON.stringify(lists));
+                }
+            },
+            
+            deleteList: async (id) => {
+                try {
+                    await fetch(`/api/lists/${id}`, { method: 'DELETE' });
+                } catch (e) {
+                    console.warn("Backend niet beschikbaar, verwijderen uit LocalStorage");
+                    let lists = JSON.parse(localStorage.getItem('myLists') || '[]');
+                    lists = lists.filter(l => l.id !== id);
+                    localStorage.setItem('myLists', JSON.stringify(lists));
+                }
+            },
+
+            restoreList: async (listObj) => { 
+                await DataService.saveList(listObj); 
+            },
+
+            getHistory: async () => {
+                try {
+                    const response = await fetch('/api/history');
+                    if (!response.ok) throw new Error('Network error');
+                    return await response.json();
+                } catch (e) { 
+                    const h = localStorage.getItem('shoppingHistory');
+                    return h ? JSON.parse(h) : [];
+                }
+            },
+            
+            addHistory: async (entry) => {
+                try {
+                    await fetch('/api/history', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(entry)
+                    });
+                } catch (e) { 
+                    console.warn("Backend niet beschikbaar, geschiedenis opslaan in LocalStorage");
+                    const history = JSON.parse(localStorage.getItem('shoppingHistory') || '[]');
+                    history.push(entry);
+                    localStorage.setItem('shoppingHistory', JSON.stringify(history));
+                }
+            }
+        };
+
+        /**
+         * APP LOGIC
+         */
+        const app = {
+            currentList: null, shoppingList: [], undoState: null, statsDate: new Date(),
+
+            init: () => { app.renderDashboard(); },
+            
+            // --- UI HELPERS ---
+            showToast: (msg, undoCallback = null) => {
+                const container = document.getElementById('notification-container');
+                const el = document.createElement('div');
+                el.className = "bg-dark-800 text-white px-4 py-3 rounded-lg shadow-xl border border-gray-700 flex justify-between items-center animate-slide-up pointer-events-auto";
+                let html = `<span class="text-sm font-medium mr-4">${msg}</span>`;
+                if (undoCallback) html += `<button id="undo-btn" class="text-emerald-400 font-bold text-sm hover:text-emerald-300 uppercase tracking-wide">Herstel</button>`;
+                el.innerHTML = html;
+                container.appendChild(el);
+                if (undoCallback) { el.querySelector('#undo-btn').onclick = () => { undoCallback(); el.remove(); }; }
+                setTimeout(() => { if(el.parentElement) { el.style.opacity = '0'; el.style.transform = 'translateY(10px)'; setTimeout(() => el.remove(), 300); } }, 4000);
+            },
+
+            handleUndo: async () => {
+                if (!app.undoState) return;
+                if (app.undoState.type === 'list') {
+                    if (app.undoState.isPredefined) DataService.restorePredefined(app.undoState.data.id);
+                    else await DataService.restoreList(app.undoState.data);
+                    app.renderDashboard();
+                } else if (app.undoState.type === 'item') {
+                    app.currentList.items.splice(app.undoState.index, 0, app.undoState.data);
+                    app.renderEditor(false);
+                }
+                app.undoState = null;
+            },
+
+            // --- VIEW: Dashboard ---
+            renderDashboard: async () => {
+                const main = document.getElementById('main-content');
+                const tpl = document.getElementById('tpl-dashboard').content.cloneNode(true);
+                const savedContainer = tpl.getElementById('saved-list-container');
+                const savedSection = tpl.getElementById('saved-section');
+                const predefinedContainer = tpl.getElementById('predefined-list-container');
+
+                document.getElementById('header-title').innerText = "SuperLijst";
+                document.getElementById('header-actions').innerHTML = `
+                <button onclick="app.renderStats()" class="text-gray-400 hover:text-cyan-400 transition" title="Statistieken"><i class="fa-solid fa-chart-simple"></i></button>`;
+
+                const visiblePredefined = DataService.getPredefinedLists();
+                visiblePredefined.forEach(list => predefinedContainer.appendChild(app.createListCard(list, false)));
+
+                // Fetch data (will use Hybrid Service)
+                const savedLists = await DataService.getSavedLists();
+                
+                if (savedLists.length > 0) {
+                    savedSection.classList.remove('hidden');
+                    savedLists.forEach(list => savedContainer.appendChild(app.createListCard(list, true)));
+                }
+
+                main.innerHTML = ''; main.appendChild(tpl);
+            },
+
+            createListCard: (list, isSaved) => {
+                const div = document.createElement('div');
+                div.className = "bg-dark-800 p-4 rounded-xl border border-gray-800 active:scale-[0.98] transition cursor-pointer flex justify-between items-center group relative overflow-hidden";
+                div.onclick = (e) => { if(!e.target.closest('.delete-btn')) app.loadListForEditing(list); };
+                div.innerHTML = `
+                    <div class="flex items-center gap-4 z-10">
+                        <div class="w-10 h-10 rounded-full bg-dark-900/50 flex items-center justify-center text-emerald-500 font-bold text-lg">${list.name.charAt(0).toUpperCase()}</div>
+                        <div><h3 class="font-bold text-white leading-tight">${list.name}</h3><p class="text-xs text-gray-500 mt-0.5">${list.items.length} producten</p></div>
+                    </div>`;
+                
+                const delBtn = document.createElement('button');
+                delBtn.className = "delete-btn text-gray-600 hover:text-red-500 p-3 -mr-2 transition z-10 relative";
+                delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+                delBtn.onclick = async (e) => {
+                    e.stopPropagation();
+                    app.undoState = { type: 'list', data: list, isPredefined: !isSaved };
+                    if (isSaved) await DataService.deleteList(list.id);
+                    else DataService.deletePredefined(list.id);
+                    app.renderDashboard();
+                    app.showToast(`'${list.name}' verwijderd`, app.handleUndo);
+                };
+                div.appendChild(delBtn);
+                return div;
+            },
+
+            // --- VIEW: Editor ---
+            startEmpty: () => { app.loadListForEditing({ id: null, name: "", items: [] }); },
+            loadListForEditing: (list) => {
+                app.currentList = JSON.parse(JSON.stringify(list));
+                if (list.id && list.id.startsWith('p')) app.currentList.id = null;
+                app.renderEditor();
+            },
+            renderEditor: (focusNew = true) => {
+                const main = document.getElementById('main-content');
+                const tpl = document.getElementById('tpl-editor').content.cloneNode(true);
+                const nameInput = tpl.getElementById('list-name-input');
+                nameInput.value = app.currentList.name;
+                nameInput.oninput = (e) => app.currentList.name = e.target.value;
+                const ul = tpl.getElementById('editor-items');
+                app.currentList.items.forEach((item, index) => ul.appendChild(app.createEditorItem(item, index)));
+                
+                document.getElementById('header-title').innerText = "Bewerken";
+                document.getElementById('header-actions').innerHTML = `<button onclick="app.shareList()" class="text-emerald-500 hover:text-white transition"><i class="fa-solid fa-share-nodes"></i></button>`;
+                
+                main.innerHTML = ''; main.appendChild(tpl);
+                new Sortable(document.getElementById('editor-items'), {
+                    animation: 150, handle: '.drag-handle', ghostClass: 'sortable-ghost', dragClass: 'sortable-drag',
+                    onEnd: (evt) => {
+                        const item = app.currentList.items.splice(evt.oldIndex, 1)[0];
+                        app.currentList.items.splice(evt.newIndex, 0, item);
+                    }
+                });
+                if (focusNew) { const ni = document.getElementById('new-item-input'); if(ni) ni.focus(); }
+            },
+            createEditorItem: (item, index) => {
+                const li = document.createElement('li');
+                li.className = "flex items-center gap-2 bg-dark-800 p-2 rounded-lg group animate-fade-in border border-gray-800";
+                li.innerHTML = `
+                    <div class="drag-handle text-gray-600 cursor-grab p-2 hover:text-white touch-none"><i class="fa-solid fa-grip-vertical"></i></div>
+                    <input type="text" value="${item.name}" onchange="app.updateItem(${index}, 'name', this.value)" class="flex-grow bg-transparent text-white font-medium outline-none border-b border-transparent focus:border-gray-600 px-1 py-1" placeholder="Naam van product">
+                    <button onclick="app.removeItem(${index})" class="text-gray-600 hover:text-red-500 transition p-2"><i class="fa-solid fa-xmark"></i></button>`;
+                return li;
+            },
+            updateItem: (index, field, value) => { app.currentList.items[index][field] = value; },
+            addItem: (name = null) => {
+                const input = document.getElementById('new-item-input');
+                const val = name || (input ? input.value.trim() : '');
+                if (val) { app.currentList.items.push({ name: val }); app.renderEditor(); }
+            },
+            removeItem: (index) => {
+                const item = app.currentList.items[index];
+                app.undoState = { type: 'item', data: item, index: index };
+                app.currentList.items.splice(index, 1);
+                app.renderEditor(false);
+                app.showToast("Item verwijderd", app.handleUndo);
+            },
+            
+            // --- Actions ---
+            startVoiceInput: () => {
+                if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { alert("Geen spraakondersteuning"); return; }
+                const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+                const rec = new SR(); rec.lang = 'nl-NL'; rec.interimResults = false;
+                const mic = document.getElementById('mic-icon'); mic.className = "fa-solid fa-microphone-lines text-red-500 animate-pulse";
+                rec.start();
+                rec.onresult = (e) => { document.getElementById('new-item-input').value = e.results[0][0].transcript; mic.className = "fa-solid fa-microphone"; document.getElementById('new-item-input').focus(); };
+                rec.onend = () => mic.className = "fa-solid fa-microphone";
+            },
+            shareList: () => {
+                const text = app.currentList.items.map(i => `- ${i.name}`).join('\n');
+                const full = `Boodschappenlijst: ${app.currentList.name}\n\n${text}`;
+                if (navigator.share) navigator.share({ title: app.currentList.name, text: full }).catch(console.error);
+                else { navigator.clipboard.writeText(full); app.showToast("Gekopieerd!"); }
+            },
+            saveAndShop: async () => {
+                if (!app.currentList.name) return app.showToast("Geef de lijst een naam!");
+                if (app.currentList.items.length === 0) return app.showToast("Lijst is leeg!");
+                if (!app.currentList.id) app.currentList.id = 'u-' + Date.now();
+                await DataService.saveList(app.currentList);
+                app.startShoppingMode();
+            },
+
+            // --- VIEW: Shopping ---
+            startShoppingMode: () => {
+                app.shoppingList = app.currentList.items.map(item => ({ ...item, done: false }));
+                app.renderShopping();
+            },
+            renderShopping: () => {
+                const main = document.getElementById('main-content');
+                const tpl = document.getElementById('tpl-shopping').content.cloneNode(true);
+                tpl.getElementById('shopping-title').innerText = app.currentList.name || "Boodschappen";
+                document.getElementById('header-title').innerText = "Winkelen";
+                document.getElementById('header-actions').innerHTML = ''; 
+                const ul = tpl.getElementById('shopping-items');
+                app.shoppingList.forEach((item, index) => { ul.appendChild(app.createShoppingItem(item, index)); });
+                main.innerHTML = ''; main.appendChild(tpl); app.updateProgress();
+            },
+            createShoppingItem: (item, index) => {
+                const li = document.createElement('li');
+                const isDone = item.done;
+                li.className = `flex items-center justify-between p-4 rounded-xl cursor-pointer transition-all duration-300 border select-none group ${isDone ? 'bg-dark-900 border-gray-800 opacity-60' : 'bg-dark-800 border-gray-700 shadow-md hover:border-emerald-500/50'}`;
+                li.onclick = () => { if(navigator.vibrate) navigator.vibrate(20); app.toggleShopItem(index); };
+                li.innerHTML = `
+                    <div class="flex items-center w-full">
+                        <div class="w-6 h-6 rounded border-2 mr-3 flex items-center justify-center shrink-0 transition-colors ${isDone ? 'bg-emerald-500 border-emerald-500' : 'border-gray-500 bg-transparent'}"><i class="fa-solid fa-check text-white text-xs ${isDone ? 'opacity-100' : 'opacity-0'}"></i></div>
+                        <div class="${isDone ? 'line-through text-gray-500' : 'text-gray-100'} flex items-center flex-grow overflow-hidden"><span class="text-lg font-medium truncate">${item.name}</span></div>
+                    </div>`;
+                return li;
+            },
+            toggleShopItem: (index) => { app.shoppingList[index].done = !app.shoppingList[index].done; app.renderShopping(); },
+            updateProgress: () => {
+                const total = app.shoppingList.length; const done = app.shoppingList.filter(i => i.done).length;
+                const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+                document.getElementById('progress-bar').style.width = `${pct}%`; document.getElementById('progress-text').innerText = `${pct}%`;
+                if (done === total && total > 0) app.showToast("Boodschappen compleet! 🎉");
+            },
+            finishShopping: async () => {
+                const bought = app.shoppingList.filter(i => i.done).length;
+                if (bought > 0) await DataService.addHistory({ date: new Date().toISOString(), itemCount: bought });
+                app.renderDashboard();
+            },
+
+            // --- VIEW: Stats ---
+            renderStats: () => {
+                const main = document.getElementById('main-content');
+                const tpl = document.getElementById('tpl-stats').content.cloneNode(true);
+                document.getElementById('header-title').innerText = "Statistieken";
+                document.getElementById('header-actions').innerHTML = '';
+                main.innerHTML = ''; main.appendChild(tpl);
+                app.updateCalendar();
+            },
+            changeStatMonth: (delta) => { app.statsDate.setMonth(app.statsDate.getMonth() + delta); app.updateCalendar(); },
+            updateCalendar: async () => {
+                const year = app.statsDate.getFullYear(); const month = app.statsDate.getMonth();
+                const monthNames = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
+                document.getElementById('stats-month-year').innerText = `${monthNames[month]} ${year}`;
+
+                const history = await DataService.getHistory();
+                const now = new Date();
+                const dayCounts = {};
+                let monthTrips = 0; let yearTrips = 0;
+
+                history.forEach(entry => {
+                    const d = new Date(entry.date);
+                    if (d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) monthTrips++;
+                    if (d.getFullYear() === now.getFullYear()) yearTrips++;
+                    if (d.getMonth() === month && d.getFullYear() === year) {
+                        const dayKey = d.getDate(); dayCounts[dayKey] = (dayCounts[dayKey] || 0) + entry.itemCount;
+                    }
+                });
+
+                document.getElementById('stat-count-month').innerText = monthTrips;
+                document.getElementById('stat-count-year').innerText = yearTrips;
+
+                const daysContainer = document.getElementById('calendar-days'); daysContainer.innerHTML = '';
+                const firstDay = new Date(year, month, 1).getDay();
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+                const startOffset = firstDay === 0 ? 6 : firstDay - 1;
+
+                for (let i = 0; i < startOffset; i++) daysContainer.appendChild(document.createElement('div'));
+                for (let day = 1; day <= daysInMonth; day++) {
+                    const div = document.createElement('div');
+                    const count = dayCounts[day];
+                    div.className = `aspect-square rounded-lg flex flex-col items-center justify-center text-sm font-medium relative border ${count !== undefined ? 'bg-emerald-500/20 border-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-dark-900 border-gray-800 text-gray-500'}`;
+                    div.innerHTML = `<span>${day}</span>` + (count !== undefined ? `<span class="text-[9px] text-emerald-400 font-bold mt-[-2px]">+${count}</span>` : '');
+                    daysContainer.appendChild(div);
+                }
+            }
+        };
+
+        window.addEventListener('DOMContentLoaded', app.init);
+    </script>
+</body>
+</html>
