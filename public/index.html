@@ -102,14 +102,20 @@
             </div>
 
             <!-- Actions (Centered Yellow Button) -->
-            <div class="flex flex-col items-center gap-4 mt-2">
+            <div class="flex flex-col items-center gap-4 mt-2 w-full">
                 <button onclick="app.saveAndShop()" class="w-full max-w-xs bg-yellow-400 hover:bg-yellow-300 text-black font-extrabold text-lg py-4 rounded-2xl shadow-xl shadow-yellow-900/20 transform transition hover:scale-[1.02] flex items-center justify-center gap-2">
                     <i class="fa-solid fa-cart-shopping"></i> Start Winkelen
                 </button>
                 
-                <button onclick="app.renderDashboard()" class="text-gray-500 hover:text-gray-300 text-sm font-medium py-2">
-                    Annuleren / Opslaan
-                </button>
+                <!-- Split Buttons -->
+                <div class="grid grid-cols-2 gap-4 w-full max-w-xs mt-2">
+                    <button onclick="app.renderDashboard()" class="text-gray-500 hover:text-white py-3 rounded-xl border border-gray-700 hover:border-gray-500 transition text-sm font-medium">
+                        Annuleren
+                    </button>
+                    <button onclick="app.saveOnly()" class="text-emerald-400 hover:text-emerald-300 py-3 rounded-xl border border-gray-700 hover:border-emerald-500/50 transition text-sm font-medium">
+                        <i class="fa-solid fa-floppy-disk mr-1"></i> Opslaan
+                    </button>
+                </div>
             </div>
         </div>
     </template>
@@ -133,7 +139,7 @@
     </template>
 
     <template id="tpl-stats">
-        <div class="flex flex-col h-full animate-fade-in">
+        <div class="flex flex-col h-full animate-fade-in pb-8">
             <div class="flex justify-between items-center mb-4">
                 <button onclick="app.changeStatMonth(-1)" class="p-2 text-gray-400 hover:text-white"><i class="fa-solid fa-chevron-left"></i></button>
                 <h2 id="stats-month-year" class="text-lg font-bold text-white capitalize"></h2>
@@ -146,7 +152,7 @@
                 <div id="calendar-days" class="calendar-grid"></div>
             </div>
             <h3 class="text-xs uppercase tracking-wider text-gray-500 font-bold mb-3 pl-1">Overzicht</h3>
-            <div class="grid grid-cols-2 gap-4">
+            <div class="grid grid-cols-2 gap-4 mb-6">
                 <div class="bg-dark-800 p-4 rounded-xl border border-gray-800 flex flex-col items-center justify-center">
                     <span class="text-gray-400 text-xs mb-1">Deze maand</span>
                     <span id="stat-count-month" class="text-3xl font-bold text-emerald-400">0</span>
@@ -158,7 +164,14 @@
                     <span class="text-gray-500 text-[10px]">keer gewinkeld</span>
                 </div>
             </div>
-            <button onclick="app.renderDashboard()" class="mt-auto w-full py-3 text-gray-400 hover:text-white text-sm font-medium">Terug naar overzicht</button>
+
+            <!-- Clear & Back Buttons -->
+            <div class="mt-auto space-y-3">
+                <button onclick="app.clearStats()" class="w-full py-3 text-red-400 hover:text-red-300 border border-red-900/30 hover:border-red-900/60 rounded-xl bg-red-500/5 transition text-sm font-medium flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-trash-can"></i> Geschiedenis wissen
+                </button>
+                <button onclick="app.renderDashboard()" class="w-full py-3 text-gray-400 hover:text-white text-sm font-medium">Terug naar overzicht</button>
+            </div>
         </div>
     </template>
 
@@ -273,6 +286,18 @@
                     history.push(entry);
                     localStorage.setItem('shoppingHistory', JSON.stringify(history));
                 }
+            },
+
+            // NEW: Clear history logic
+            clearHistory: async () => {
+                try {
+                    // Probeer te wissen via API (als endpoint bestaat/zou bestaan)
+                    await fetch('/api/history', { method: 'DELETE' });
+                } catch (e) {
+                    console.warn("Backend delete not supported or failed, clearing local only");
+                }
+                // Altijd localstorage wissen als backup
+                localStorage.removeItem('shoppingHistory');
             }
         };
 
@@ -436,6 +461,14 @@
                 await DataService.saveList(app.currentList);
                 app.startShoppingMode();
             },
+            // NEW FUNCTION: Save only (no shopping)
+            saveOnly: async () => {
+                if (!app.currentList.name) return app.showToast("Geef de lijst een naam!");
+                if (!app.currentList.id) app.currentList.id = 'u-' + Date.now();
+                await DataService.saveList(app.currentList);
+                app.showToast("Lijst opgeslagen");
+                app.renderDashboard();
+            },
 
             // --- VIEW: Shopping ---
             startShoppingMode: () => {
@@ -487,6 +520,8 @@
                 app.updateCalendar();
             },
             changeStatMonth: (delta) => { app.statsDate.setMonth(app.statsDate.getMonth() + delta); app.updateCalendar(); },
+            
+            // Updated Calendar Logic: Count trips (visits) instead of items
             updateCalendar: async () => {
                 const year = app.statsDate.getFullYear(); const month = app.statsDate.getMonth();
                 const monthNames = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
@@ -502,7 +537,9 @@
                     if (d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) monthTrips++;
                     if (d.getFullYear() === now.getFullYear()) yearTrips++;
                     if (d.getMonth() === month && d.getFullYear() === year) {
-                        const dayKey = d.getDate(); dayCounts[dayKey] = (dayCounts[dayKey] || 0) + entry.itemCount;
+                        const dayKey = d.getDate();
+                        // WIJZIGING: Tel hier +1 per bezoek, in plaats van +entry.itemCount
+                        dayCounts[dayKey] = (dayCounts[dayKey] || 0) + 1; 
                     }
                 });
 
@@ -519,8 +556,18 @@
                     const div = document.createElement('div');
                     const count = dayCounts[day];
                     div.className = `aspect-square rounded-lg flex flex-col items-center justify-center text-sm font-medium relative border ${count !== undefined ? 'bg-emerald-500/20 border-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-dark-900 border-gray-800 text-gray-500'}`;
+                    // WIJZIGING: Toon '+1' of '+2' (aantal bezoeken)
                     div.innerHTML = `<span>${day}</span>` + (count !== undefined ? `<span class="text-[9px] text-emerald-400 font-bold mt-[-2px]">+${count}</span>` : '');
                     daysContainer.appendChild(div);
+                }
+            },
+
+            // NEW: Clear stats UI Logic
+            clearStats: async () => {
+                if (confirm("Weet je zeker dat je alle geschiedenis en statistieken wilt wissen? Dit kan niet ongedaan worden gemaakt.")) {
+                    await DataService.clearHistory();
+                    app.showToast("Statistieken gewist");
+                    app.renderStats(); // Refresh view
                 }
             }
         };
