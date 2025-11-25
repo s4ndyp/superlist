@@ -91,6 +91,15 @@ app.post('/api/history', (req, res) => {
     });
 });
 
+// 6. NIEUW: Verwijder volledige geschiedenis
+app.delete('/api/history', (req, res) => {
+    db.run("DELETE FROM history", function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        // this.changes bevat het aantal verwijderde rijen
+        res.json({ status: "history_cleared", changes: this.changes });
+    });
+});
+
 // Start Server
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
