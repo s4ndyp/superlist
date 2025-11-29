@@ -445,10 +445,11 @@
                 console.error('API Fetch Error:', error);
                 
                 // 2. Vang netwerkfouten (fetch faalt) ook op als OFFLINE
-                // TypeError treedt vaak op bij netwerkfouten (DNS, connection refused)
-                // Als het een mutatie is en het is een netwerkfout, forceer offline flow
-                if (isMutation && (error.name === 'TypeError' || error.message.includes('Failed to fetch'))) {
-                    throw new Error(OFFLINE_MUTATION_BLOCKED);
+                // Verwijder specifieke string checks (Failed to fetch) omdat deze taalafhankelijk zijn.
+                // Als het een mutatie is en we vangen een TypeError (standaard netwerkfout bij fetch),
+                // en het is GEEN auth error die we zelf gooiden, dan is het een offline situatie.
+                if (isMutation && error.name === 'TypeError' && error.message !== 'Authenticatie vereist.' && error.message !== 'Sessie verlopen') {
+                     throw new Error(OFFLINE_MUTATION_BLOCKED);
                 }
 
                 throw error;
@@ -539,6 +540,7 @@
                     
                 } catch (e) {
                     if (e.message === OFFLINE_MUTATION_BLOCKED) {
+                        console.log("Offline mutation detected, queueing...");
                         // Offline: plaats mutatie in wachtrij
                         const mutation = {
                             method,
@@ -991,6 +993,7 @@
                 }
             },
             
+            // --- UPDATED: Show actual error message in toast ---
             saveListAction: async (andShop = false) => {
                 const list = app.currentList;
                 if (!list.name) return app.showToast("Geef de lijst een naam!", 'danger');
@@ -1010,7 +1013,8 @@
                     }
                 } catch (err) {
                     console.error("Save error:", err);
-                    app.showToast("Er ging iets mis bij het opslaan.", 'danger');
+                    // Toon de echte foutmelding in de UI zodat we weten wat er misgaat (bijv. "Authenticatie vereist" of "Offline")
+                    app.showToast("Fout bij opslaan: " + (err.message || err), 'danger');
                 }
             },
             
