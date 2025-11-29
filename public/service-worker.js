@@ -1,9 +1,13 @@
-const CACHE_NAME = 'superlijst-v1';
+// Zorg voor een nieuwe versie om de cache te forceren
+const CACHE_NAME = 'superlijst-v2'; 
 
 // De bestanden die nodig zijn om de app te laden (inclusief externe bibliotheken)
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
+    './manifest.json', // <-- TOEGEVOEGD
+    './android-chrome-192x192.png', // <-- TOEGEVOEGD
+    './android-chrome-512x512.png', // <-- TOEGEVOEGD
     'https://cdn.tailwindcss.com',
     'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
     'https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js'
