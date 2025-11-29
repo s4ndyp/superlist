@@ -8,9 +8,10 @@
     <meta name="theme-color" content="#0f172a">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3796/3796063.png">
+    <!-- De echte iconen moeten nog in de PWA map worden geplaatst -->
+    <link rel="apple-touch-icon" href="android-chrome-192x192.png"> 
     
-    <!-- PWA MANIFEST LINK (Verwijst nu naar het bestand public/manifest.json) -->
+    <!-- PWA MANIFEST LINK -->
     <link rel="manifest" href="manifest.json">
 
     <script src="https://cdn.tailwindcss.com"></script>
@@ -55,13 +56,11 @@
         /* BELANGRIJKE AANPASSING: Gebruik safe-area-inset-top voor de header padding */
         .safe-header {
             padding-top: calc(1rem + env(safe-area-inset-top, 0px));
-            /* Haal de standaard padding-top van p-4 (1rem) eraf, omdat die nu in de calc zit */
             padding-bottom: 1rem;
         }
 
         /* Zorg ervoor dat de main content de header niet overlapt (vooral belangrijk als de header 'fixed' zou zijn) */
         main {
-            /* De padding-bottom wordt nu dynamisch geregeld via JS/Templates */
             padding-bottom: env(safe-area-inset-bottom, 1rem); 
         }
 
@@ -81,7 +80,7 @@
         
         <div id="notification-container" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-11/12 max-w-sm z-50 flex flex-col gap-2 pointer-events-none"></div>
 
-        <!-- NIEUW: Container voor de vaste actiebalk (buiten main) -->
+        <!-- Container voor de vaste actiebalk (buiten main) -->
         <div id="fixed-action-bar" class="fixed inset-x-0 bottom-0 z-30"></div> 
     </div>
 
@@ -130,7 +129,8 @@
     </template>
 
     <template id="tpl-editor">
-        <div class="flex flex-col h-full animate-fade-in pb-48">
+        <!-- Scrollruimte vergroot voor de vaste actiebalk -->
+        <div class="flex flex-col h-full animate-fade-in pb-48"> 
             <!-- Header Sticky -->
             <div class="mb-4 sticky top-0 bg-dark-900 z-10 py-2 border-b border-gray-800/50">
                 <label class="text-xs text-gray-500 uppercase font-bold ml-1">Lijst Naam</label>
@@ -236,17 +236,73 @@
     </template>
 
     <script>
+        // Unieke ID generator voor lokale items
+        function uuidv4() {
+            return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+                (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+            );
+        }
+
+        // Foutcode voor offline mutaties
+        const OFFLINE_MUTATION_BLOCKED = 'OFFLINE_MUTATION_BLOCKED';
+
         /**
-         * REGISTER SERVICE WORKER
+         * ------------------------------------------------------------------
+         * SERVICE WORKER & SYNC
+         * ------------------------------------------------------------------
          */
+
+        // Registreer Service Worker
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('./service-worker.js')
-                    .then(reg => console.log('SW geregistreerd!', reg.scope))
+                    .then(reg => {
+                        console.log('SW geregistreerd!', reg.scope);
+                        // Luister naar berichten van de Service Worker (voor SYNC_SUCCESS)
+                        // app.handleSWMessage wordt later gedefinieerd, maar dat is prima,
+                        // want de listener wordt pas actief bij het ontvangen van een bericht.
+                        navigator.serviceWorker.addEventListener('message', app.handleSWMessage); 
+                    })
                     .catch(err => console.log('SW mislukt:', err));
             });
         }
         
+        // Controleren van de netwerkstatus
+        const isOnline = () => navigator.onLine;
+
+        // Sync Queue Helpers
+        const SYNC_QUEUE_KEY = 'superlijst_sync_queue';
+        const TEMP_ID_PREFIX = 'temp-';
+
+        const SyncQueue = {
+            getQueue: () => JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY) || '[]'),
+            setQueue: (queue) => localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue)),
+            
+            // Nieuwe mutatie toevoegen aan de queue
+            addMutation: (mutation) => {
+                const queue = SyncQueue.getQueue();
+                queue.push(mutation);
+                SyncQueue.setQueue(queue);
+            },
+
+            // Haal de volgende mutatie op en verwijder deze uit de wachtrij
+            getNextMutation: () => {
+                const queue = SyncQueue.getQueue();
+                if (queue.length === 0) return null;
+                const next = queue.shift();
+                SyncQueue.setQueue(queue);
+                return next;
+            },
+            
+            // Mutatie terugzetten (bij fout)
+            revertMutation: (mutation) => {
+                const queue = SyncQueue.getQueue();
+                queue.unshift(mutation); // Plaats de mislukte mutatie bovenaan de wachtrij
+                SyncQueue.setQueue(queue);
+            }
+        };
+
+
         // ************************************************************
         // API BASIS URL CONSTANTE (WORDT GECONTROLEERD DOOR AUTH SERVICE)
         // ************************************************************
@@ -327,16 +383,24 @@
 
         /**
          * ------------------------------------------------------------------
-         * API HELPER (Fetch Wrapper met JWT)
+         * API HELPER (Fetch Wrapper met JWT en Offline Sync)
          * ------------------------------------------------------------------
          */
         async function apiFetch(path, options = {}) {
+            const isMutation = ['POST', 'PUT', 'DELETE'].includes(options.method);
+            
+            // Offline check voor mutaties
+            if (!isOnline() && isMutation) {
+                // Als we offline zijn, blokkeren we de mutatie en laten de DataService deze in de wachtrij plaatsen.
+                throw new Error(OFFLINE_MUTATION_BLOCKED);
+            }
+
             // Construeer de volledige URL met de dynamisch opgehaalde basis URL
-            const url = `${AuthService.getApiBaseUrl()}${path}`;
+            const apiUrlBase = AuthService.getApiBaseUrl();
+            const url = `${apiUrlBase}${path}`;
             
             const token = AuthService.getToken();
             if (!token) {
-                // Als er geen token is, dwing de gebruiker naar het inlogscherm
                 app.renderAuth();
                 throw new Error('Authenticatie vereist.');
             }
@@ -350,7 +414,6 @@
             const config = {
                 ...options,
                 headers,
-                // Voor PUT/POST/DELETE sturen we JSON. Voor GET kan de body weg.
                 body: options.body ? JSON.stringify(options.body) : undefined
             };
 
@@ -358,7 +421,6 @@
                 const response = await fetch(url, config);
 
                 if (response.status === 401) {
-                    // JWT verlopen of ongeldig
                     AuthService.logout();
                     app.showToast('Sessie verlopen. Gelieve opnieuw in te loggen.', 'danger');
                     throw new Error('Sessie verlopen');
@@ -370,14 +432,12 @@
                     throw new Error(errorData.error || `Netwerkfout: ${response.status}`);
                 }
                 
-                // Bij 204 (No Content, zoals DELETE) geven we null terug
                 if (response.status === 204) return null;
-
                 return await response.json();
 
             } catch (error) {
-                // Bijv. Netwerkfout
                 console.error('API Fetch Error:', error);
+                // Gooi de fout opnieuw, tenzij we offline zijn, dan blokkeren we de mutatie.
                 throw error;
             }
         }
@@ -385,15 +445,21 @@
 
         /**
          * ------------------------------------------------------------------
-         * DATA SERVICE (API EERST)
+         * DATA SERVICE (API EERST + OFFLINE FALLBACK)
          * ------------------------------------------------------------------
          */
+        const LOCAL_LISTS_KEY = 'superlijst_local_lists';
+
         const DataService = {
             _rawPredefined: [
                 { id: 'p1', name: 'Pasta Avond', items: [{ name: '1 zak Pasta Penne' }, { name: '1 pot Tomatensaus' }, { name: '500gr Rundergehakt' }, { name: 'Zakje Parmezaanse Kaas' }, { name: '2 st Courgette' }] },
                 { id: 'p2', name: 'Ontbijt', items: [{ name: '2 liter Melk' }, { name: '1 heel Brood' }, { name: 'Doosje Eieren' }, { name: 'Plakjes Kaas' }] }
             ],
 
+            // Lokaal opslaan van de momenteel gesynchroniseerde/lokale lijstweergave
+            _getListsFromLocalStorage: () => JSON.parse(localStorage.getItem(LOCAL_LISTS_KEY) || '[]'),
+            _setListsToLocalStorage: (lists) => localStorage.setItem(LOCAL_LISTS_KEY, JSON.stringify(lists)),
+            
             // Standaard sjabloon logica blijft lokaal
             getPredefinedLists: () => {
                 const hidden = JSON.parse(localStorage.getItem('hiddenPredefined') || '[]');
@@ -410,119 +476,147 @@
                 localStorage.setItem('hiddenPredefined', JSON.stringify(hidden));
             },
 
-            // --- API CALLS ---
+            // --- API CALLS MET OFFLINE LOGICA ---
 
-            /**
-             * Haalt alle opgeslagen lijsten op.
-             * Gebruikt: GET /api/lists
-             * @returns {Promise<Array>} Array of list objects (met id en data veld)
-             */
             getSavedLists: async () => {
-                try {
-                    // We gebruiken de generieke GET /api/lists route
-                    const lists = await apiFetch('/api/lists');
-                    // Het API antwoord is al een array van {id: 'mongo_id', data: {...}} objecten
-                    return lists || [];
-                } catch (e) {
-                    app.showToast('Fout bij ophalen lijsten.', 'danger');
-                    return [];
+                if (!isOnline()) {
+                    app.showToast('Offline modus. Toon lokale lijsten.', 'danger');
+                    return DataService._getListsFromLocalStorage();
                 }
-            },
-            
-            /**
-             * Slaat een nieuwe lijst op (POST) of update een bestaande (PUT).
-             * Gebruikt: POST /api/lists of PUT /api/lists/<id>
-             * @param {Object} listObj - De lijst data ({name, items}) inclusief optioneel 'id'.
-             * @returns {Promise<Object>} Het opgeslagen/geüpdatete list object.
-             */
-            saveList: async (listObj) => {
+
                 try {
-                    const dataToSend = { ...listObj };
-                    delete dataToSend.id; // ID mag niet in de body
+                    const lists = await apiFetch('/api/lists', { method: 'GET' });
+                    // API antwoord is al een array van {id: 'mongo_id', data: {...}} objecten
+                    const remoteLists = lists || [];
                     
-                    if (listObj.id) {
-                        // PUT: Update bestaande
-                        const response = await apiFetch(`/api/lists/${listObj.id}`, {
-                            method: 'PUT',
-                            body: dataToSend
-                        });
-                        return response;
-                    } else {
-                        // POST: Nieuwe lijst
-                        const response = await apiFetch('/api/lists', {
-                            method: 'POST',
-                            body: dataToSend
-                        });
-                        return response;
-                    }
+                    // Sla de gesynchroniseerde lijsten lokaal op
+                    DataService._setListsToLocalStorage(remoteLists); 
+                    return remoteLists;
                 } catch (e) {
-                    app.showToast(`Fout bij opslaan van lijst: ${e.message}`, 'danger');
-                    return null;
+                    app.showToast('Fout bij ophalen lijsten. Toon lokale lijsten.', 'danger');
+                    return DataService._getListsFromLocalStorage();
                 }
             },
             
-            /**
-             * Verwijdert een lijst.
-             * Gebruikt: DELETE /api/lists/<id>
-             * @param {string} id - De MongoDB ID van de lijst.
-             */
-            deleteList: async (id) => {
+            saveList: async (listObj) => {
+                const isNew = !listObj.id || listObj.id.startsWith(TEMP_ID_PREFIX);
+                const method = isNew ? 'POST' : 'PUT';
+                const path = isNew ? '/api/lists' : `/api/lists/${listObj.id}`;
+                const dataToSend = { ...listObj };
+
+                if (isNew) {
+                    // Genereer een tijdelijke ID voor lokale weergave
+                    dataToSend.id = `${TEMP_ID_PREFIX}${uuidv4()}`; 
+                    delete dataToSend._id;
+                } else {
+                    delete dataToSend.id; 
+                    delete dataToSend._id; 
+                }
+                
                 try {
-                    // API Fetch handelt de DELETE /api/lists/<id> call af
-                    await apiFetch(`/api/lists/${id}`, { method: 'DELETE' });
+                    const response = await apiFetch(path, { method, body: dataToSend });
+                    
+                    // Op succes: ververs de volledige lijst om de nieuwe ID op te halen (voor POST)
+                    return response;
+                    
+                } catch (e) {
+                    if (e.message === OFFLINE_MUTATION_BLOCKED) {
+                        // Offline: plaats mutatie in wachtrij
+                        const mutation = {
+                            method,
+                            path,
+                            body: dataToSend,
+                            apiBaseUrl: AuthService.getApiBaseUrl()
+                        };
+                        SyncQueue.addMutation(mutation);
+                        app.showToast(`Lijst "${listObj.name}" lokaal opgeslagen. Synchroniseert zodra je online bent.`, 'success');
+                        
+                        // Zorg ervoor dat de lijst direct in de lokale cache wordt bijgewerkt
+                        const localLists = DataService._getListsFromLocalStorage();
+                        
+                        let updatedLists = localLists;
+
+                        if (isNew) {
+                            // Voeg de nieuwe lijst met TEMP_ID toe
+                            updatedLists.push({ id: dataToSend.id, data: dataToSend, temp: true });
+                        } else {
+                            // Vind en update de bestaande lokale lijst (PUT)
+                            updatedLists = localLists.map(l => 
+                                l.id === listObj.id ? { id: listObj.id, data: dataToSend } : l
+                            );
+                        }
+                        
+                        DataService._setListsToLocalStorage(updatedLists);
+                        return { id: dataToSend.id, data: dataToSend, temp: true };
+
+                    } else {
+                        throw e; // Gooi andere fouten opnieuw
+                    }
+                }
+            },
+            
+            deleteList: async (id) => {
+                const path = `/api/lists/${id}`;
+                try {
+                    await apiFetch(path, { method: 'DELETE' });
                     return true;
                 } catch (e) {
-                    app.showToast(`Fout bij verwijderen lijst: ${e.message}`, 'danger');
-                    return false;
+                    if (e.message === OFFLINE_MUTATION_BLOCKED) {
+                        // Offline: plaats mutatie in wachtrij en verwijder lokaal direct
+                        const mutation = {
+                            method: 'DELETE',
+                            path,
+                            body: { id },
+                            apiBaseUrl: AuthService.getApiBaseUrl()
+                        };
+                        SyncQueue.addMutation(mutation);
+                        app.showToast('Lijst lokaal verwijderd. Synchroniseert zodra je online bent.', 'success');
+                        
+                        // Verwijder lokaal
+                        const localLists = DataService._getListsFromLocalStorage().filter(l => l.id !== id);
+                        DataService._setListsToLocalStorage(localLists);
+                        return true;
+
+                    } else {
+                        app.showToast(`Fout bij verwijderen lijst: ${e.message}`, 'danger');
+                        return false;
+                    }
                 }
             },
 
-            // Restore is een save
             restoreList: async (listObj) => { 
+                // Restore is nu een POST of PUT afhankelijk van de ID
                 await DataService.saveList(listObj); 
             },
 
-            /**
-             * Haalt de winkelgeschiedenis op.
-             * Gebruikt: GET /api/history
-             * @returns {Promise<Array>} Array of history entries.
-             */
+            // De geschiedenis endpoints blijven grotendeels hetzelfde (niet-kritieke mutaties)
             getHistory: async () => {
-                try {
-                    const history = await apiFetch('/api/history');
-                    // API antwoord is een array van {id: 'mongo_id', data: {...}} objecten
+                 if (!isOnline()) return []; // Toon geen geschiedenis offline
+                 try {
+                    const history = await apiFetch('/api/history', { method: 'GET' });
                     return (history || []).map(h => h.data);
                 } catch (e) { 
-                    app.showToast('Fout bij ophalen geschiedenis.', 'danger');
                     return [];
                 }
             },
             
-            /**
-             * Voegt een geschiedenis entry toe.
-             * Gebruikt: POST /api/history
-             * @param {Object} entry - {date: ISOString, itemCount: number}
-             */
             addHistory: async (entry) => {
+                if (!isOnline()) return;
                 try {
-                    await apiFetch('/api/history', {
-                        method: 'POST',
-                        body: entry
-                    });
+                    await apiFetch('/api/history', { method: 'POST', body: entry });
                 } catch (e) { 
-                    app.showToast(`Fout bij opslaan geschiedenis: ${e.message}`, 'danger');
+                    // Fouten negeren bij geschiedenis (niet-kritiek)
                 }
             },
 
-            /**
-             * Verwijdert alle geschiedenis.
-             * Gebruikt: DELETE /api/history?action=deleteAll
-             */
             clearHistory: async () => {
+                 if (!isOnline()) {
+                     app.showToast('Geschiedenis wissen is niet mogelijk in offline modus.', 'danger');
+                     return false;
+                 }
                  try {
-                    // Gebruikt de DELETE /api/<endpoint>?query=... route om een bulk delete uit te voeren
-                    const result = await apiFetch('/api/history?action=deleteAll', { method: 'DELETE' });
-                    return result; 
+                    await apiFetch('/api/history?action=deleteAll', { method: 'DELETE' });
+                    return true;
                 } catch (e) {
                     app.showToast(`Fout bij wissen geschiedenis: ${e.message}`, 'danger');
                     return false;
@@ -535,25 +629,117 @@
          * APP LOGIC
          * ------------------------------------------------------------------
          */
-        const app = {
+        var app = { // GEWIJZIGD VAN const NAAR var
             currentList: null, shoppingList: [], undoState: null, statsDate: new Date(),
 
             init: () => { 
-                // Zorg ervoor dat de vaste actiebalk leeg is bij opstarten
-                document.getElementById('fixed-action-bar').innerHTML = '';
+                // --- FIX: Stel online/offline listeners hier in om zeker te zijn dat app.initSync bestaat ---
+                window.addEventListener('online', app.initSync);
+                window.addEventListener('offline', () => app.showToast("Je bent offline. Wijzigingen worden gesynchroniseerd zodra je verbinding hebt.", 'danger'));
+                // -----------------------------------------------------------------------------------------
 
+                document.getElementById('fixed-action-bar').innerHTML = '';
                 if (AuthService.isAuthenticated()) {
                     app.renderDashboard(); 
                     document.getElementById('header-actions').innerHTML = `
                         <button onclick="app.renderStats()" class="text-gray-400 hover:text-cyan-400 transition" title="Statistieken"><i class="fa-solid fa-chart-simple"></i></button>
                         <button onclick="AuthService.logout()" class="text-gray-400 hover:text-red-400 transition" title="Uitloggen"><i class="fa-solid fa-right-from-bracket"></i></button>
                     `;
+                    app.initSync(); // Start sync bij het laden van de app (indien online)
                 } else {
                     app.renderAuth();
                 }
             },
             
-            // NIEUWE HELPER: Leeg de vaste actiebalk
+            // --- SYNC LOGICA ---
+            initSync: async () => {
+                if (!isOnline()) return;
+
+                const queue = SyncQueue.getQueue();
+                if (queue.length === 0) {
+                    console.log("[Sync] Geen mutaties in de wachtrij.");
+                    return;
+                }
+
+                if ('SyncManager' in window && navigator.serviceWorker.controller) {
+                    // Als Background Sync beschikbaar is, registreer een sync-event
+                    navigator.serviceWorker.controller.postMessage({ type: 'SYNC_NOW_PLEASE' });
+                    app.showToast(`Start synchronisatie van ${queue.length} items op de achtergrond.`, 'success');
+                } else {
+                    // Fallback: start de sync direct in de client
+                    app.startClientSync();
+                }
+            },
+            
+            startClientSync: async () => {
+                if (!isOnline()) return;
+
+                let mutation = SyncQueue.getNextMutation();
+                let successCount = 0;
+                let errorCount = 0;
+
+                while (mutation) {
+                    try {
+                        const response = await apiFetch(mutation.path, { method: mutation.method, body: mutation.body });
+                        successCount++;
+
+                        // Speciale afhandeling voor POST met TEMP_ID
+                        if (mutation.method === 'POST' && mutation.body.id && mutation.body.id.startsWith(TEMP_ID_PREFIX)) {
+                            // Bij een succesvolle POST, moet de lokale cache de TEMP_ID bijwerken naar de echte ID
+                            const newId = response.id;
+                            const tempId = mutation.body.id;
+                            const localLists = DataService._getListsFromLocalStorage();
+                            
+                            const updatedLists = localLists.map(l => {
+                                if (l.id === tempId) {
+                                    return { id: newId, data: response.data };
+                                }
+                                return l;
+                            });
+                            DataService._setListsToLocalStorage(updatedLists);
+                        }
+
+                    } catch (e) {
+                        if (e.message === OFFLINE_MUTATION_BLOCKED) {
+                             // Zou niet moeten gebeuren in startClientSync, maar voor zekerheid
+                             SyncQueue.revertMutation(mutation);
+                             break;
+                        } else if (e.message.includes('401') || e.message.includes('Sessie verlopen')) {
+                            // Stop synchronisatie als de token ongeldig is
+                            SyncQueue.revertMutation(mutation); 
+                            errorCount++;
+                            break; 
+                        } else {
+                            // Netwerkfout of andere onoplosbare fout: terugzetten en opnieuw proberen
+                            SyncQueue.revertMutation(mutation);
+                            errorCount++;
+                            break;
+                        }
+                    }
+                    mutation = SyncQueue.getNextMutation(); // Haal de volgende mutatie op
+                }
+                
+                if (successCount > 0) {
+                    app.showToast(`Synchronisatie voltooid: ${successCount} items overgedragen.`, 'success');
+                    // Ververs de dashboardlijst om de definitieve ID's te tonen
+                    app.renderDashboard(); 
+                }
+                if (errorCount > 0) {
+                     app.showToast(`Fout bij synchronisatie. Probeer opnieuw in te loggen of controleer je netwerk.`, 'danger');
+                }
+            },
+
+            handleSWMessage: (event) => {
+                // Berichten ontvangen van de Service Worker
+                if (event.data.type === 'START_CLIENT_SYNC') {
+                    console.log("[Client] Bericht ontvangen: SW vraagt om Client Sync.");
+                    app.startClientSync();
+                } else if (event.data.type === 'SYNC_SUCCESS') {
+                    // Dit bericht is NIET meer nodig omdat startClientSync de afhandeling doet.
+                    // Maar we laten het hier staan als placeholder.
+                }
+            },
+
             clearFixedActions: () => {
                 document.getElementById('fixed-action-bar').innerHTML = '';
             },
@@ -571,7 +757,7 @@
                 el.innerHTML = html;
                 container.appendChild(el);
                 if (undoCallback) { el.querySelector('#undo-btn').onclick = () => { undoCallback(); el.remove(); }; }
-                setTimeout(() => { if(el.parentElement) { el.style.opacity = '0'; el.style.transform = 'translateY(10px)'; setTimeout(() => el.remove(), 300); } }, 4000);
+                setTimeout(() => { if(el.parentElement) { el.style.opacity = '0'; el.style.transform = 'translateY(10px)'; setTimeout(() => el.remove(), 400); } }, 4000);
             },
 
             handleUndo: async () => {
@@ -589,11 +775,10 @@
 
             // --- VIEW: Auth ---
             renderAuth: () => {
-                app.clearFixedActions(); // Clear fixed bar
+                app.clearFixedActions(); 
                 document.getElementById('main-content').innerHTML = '';
                 const tpl = document.getElementById('tpl-auth').content.cloneNode(true);
                 
-                // Vul het URL veld in met de laatst opgeslagen of standaardwaarde
                 const apiUrlInput = tpl.getElementById('api-url-input');
                 if (apiUrlInput) {
                     apiUrlInput.value = AuthService.getApiBaseUrl();
@@ -606,7 +791,7 @@
 
             // --- VIEW: Dashboard ---
             renderDashboard: async () => {
-                app.clearFixedActions(); // Clear fixed bar
+                app.clearFixedActions(); 
                 const main = document.getElementById('main-content');
                 const tpl = document.getElementById('tpl-dashboard').content.cloneNode(true);
                 const savedContainer = tpl.getElementById('saved-list-container');
@@ -614,18 +799,19 @@
                 const predefinedContainer = tpl.getElementById('predefined-list-container');
 
                 document.getElementById('header-title').innerText = "SuperLijst";
-                // De acties worden al in app.init() gezet na login
 
                 const visiblePredefined = DataService.getPredefinedLists();
                 visiblePredefined.forEach(list => predefinedContainer.appendChild(app.createListCard(list, false)));
 
-                // Fetch data from API
-                const apiResponse = await DataService.getSavedLists();
-                // Map de API response: {id: 'mongo_id', data: {name: '...', items: [...]}} -> {id: 'mongo_id', name: '...', items: [...]}
+                // Fetch data from API of LocalStorage
+                const apiResponse = await DataService.getSavedLists(); 
+                
+                // Map de response naar het interne list object.
                 const savedLists = apiResponse.map(doc => ({
                     id: doc.id,
                     name: doc.data.name,
-                    items: doc.data.items || []
+                    items: doc.data.items || [],
+                    temp: doc.temp || doc.id.startsWith(TEMP_ID_PREFIX)
                 }));
                 
                 if (savedLists.length > 0) {
@@ -639,18 +825,24 @@
             },
 
             createListCard: (list, isSaved) => {
+                const isTemp = list.temp;
                 const div = document.createElement('div');
-                div.className = "bg-dark-800 p-4 rounded-xl border border-gray-800 active:scale-[0.98] transition cursor-pointer flex justify-between items-center group relative overflow-hidden";
+                div.className = `bg-dark-800 p-4 rounded-xl border border-gray-800 active:scale-[0.98] transition cursor-pointer flex justify-between items-center group relative overflow-hidden ${isTemp ? 'border-dashed border-yellow-500/50' : ''}`;
                 div.onclick = (e) => { 
                     if(!e.target.closest('.delete-btn')) {
-                        // Zorg ervoor dat de ID van de opgeslagen API-lijst behouden blijft
-                        app.loadListForEditing(isSaved ? list : { ...list, id: null });
+                        app.loadListForEditing(isSaved ? list : { ...list, id: null, temp: false });
                     }
                 };
+                
+                const tempIndicator = isTemp ? '<span class="text-yellow-500 text-xs font-bold ml-2"><i class="fa-solid fa-clock-rotate-left mr-1"></i> Offline</span>' : '';
+                
                 div.innerHTML = `
                     <div class="flex items-center gap-4 z-10">
                         <div class="w-10 h-10 rounded-full bg-dark-900/50 flex items-center justify-center text-emerald-500 font-bold text-lg">${list.name.charAt(0).toUpperCase()}</div>
-                        <div><h3 class="font-bold text-white leading-tight">${list.name}</h3><p class="text-xs text-gray-500 mt-0.5">${list.items.length} producten</p></div>
+                        <div>
+                            <h3 class="font-bold text-white leading-tight">${list.name}${tempIndicator}</h3>
+                            <p class="text-xs text-gray-500 mt-0.5">${list.items.length} producten</p>
+                        </div>
                     </div>`;
                 
                 const delBtn = document.createElement('button');
@@ -658,7 +850,6 @@
                 delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
                 delBtn.onclick = async (e) => {
                     e.stopPropagation();
-                    // Maak een kopie van de list object voor de undo state
                     app.undoState = { type: 'list', data: JSON.parse(JSON.stringify(list)), isPredefined: !isSaved };
                     
                     if (isSaved) {
@@ -667,7 +858,7 @@
                             app.renderDashboard();
                             app.showToast(`'${list.name}' verwijderd`, 'success', app.handleUndo);
                         } else {
-                            app.undoState = null; // Verwijderen mislukt, geen undo mogelijk
+                            app.undoState = null; 
                         }
                     } else {
                         DataService.deletePredefined(list.id);
@@ -680,9 +871,8 @@
             },
 
             // --- VIEW: Editor ---
-            startEmpty: () => { app.loadListForEditing({ id: null, name: "", items: [] }); },
+            startEmpty: () => { app.loadListForEditing({ id: null, name: "", items: [], temp: false }); },
             loadListForEditing: (list) => {
-                // Diepe kopie om de originele lijst niet aan te tasten
                 app.currentList = JSON.parse(JSON.stringify(list));
                 app.renderEditor();
             },
@@ -693,7 +883,6 @@
                 nameInput.value = app.currentList.name;
                 nameInput.oninput = (e) => app.currentList.name = e.target.value;
                 const ul = tpl.getElementById('editor-items');
-                // Zorg ervoor dat items een array is, zelfs als het leeg is.
                 (app.currentList.items || []).forEach((item, index) => ul.appendChild(app.createEditorItem(item, index)));
                 
                 document.getElementById('header-title').innerText = "Bewerken";
@@ -702,7 +891,6 @@
                 main.innerHTML = ''; 
                 main.appendChild(tpl);
                 
-                // NIEUW: Render de vaste actiebalk
                 const fixedBarTpl = document.getElementById('tpl-editor-actions').content.cloneNode(true);
                 document.getElementById('fixed-action-bar').innerHTML = '';
                 document.getElementById('fixed-action-bar').appendChild(fixedBarTpl);
@@ -731,9 +919,8 @@
                 const input = document.getElementById('new-item-input');
                 const val = name || (input ? input.value.trim() : '');
                 if (val) { 
-                    if (!app.currentList.items) app.currentList.items = []; // Zorg voor initiële array
+                    if (!app.currentList.items) app.currentList.items = [];
                     app.currentList.items.push({ name: val }); 
-                    // Update UI zonder full render als input leeg is (sneller)
                     if (input && !name) input.value = '';
                     app.renderEditor(false);
                 }
@@ -774,7 +961,6 @@
                 const full = `Boodschappenlijst: ${app.currentList.name}\n\n${text}`;
                 if (navigator.share) navigator.share({ title: app.currentList.name, text: full }).catch(console.error);
                 else { 
-                    // Fallback voor kopiëren naar klembord
                     const tempInput = document.createElement('textarea');
                     tempInput.value = full;
                     document.body.appendChild(tempInput);
@@ -792,19 +978,15 @@
                 
                 const result = await DataService.saveList(list);
 
-                if (result && result.id) {
-                    list.id = result.id; // Zorg ervoor dat de ID wordt bijgewerkt voor een nieuwe lijst
+                if (result) {
+                    list.id = result.id;
                     if (andShop) {
                         app.startShoppingMode();
                     } else {
                         app.showToast("Lijst opgeslagen");
                         app.renderDashboard();
                     }
-                } else if (result === null) {
-                    // PUT succesvol (geen content retour) of POST mislukt
-                    if (!andShop) app.renderDashboard();
                 }
-                // Foutmelding wordt afgehandeld in DataService
             },
             
             saveAndShop: () => app.saveListAction(true),
@@ -816,7 +998,7 @@
                 app.renderShopping();
             },
             renderShopping: () => {
-                app.clearFixedActions(); // Clear fixed bar
+                app.clearFixedActions(); 
                 const main = document.getElementById('main-content');
                 const tpl = document.getElementById('tpl-shopping').content.cloneNode(true);
                 tpl.getElementById('shopping-title').innerText = app.currentList.name || "Boodschappen";
@@ -853,11 +1035,10 @@
 
             // --- VIEW: Stats ---
             renderStats: () => {
-                app.clearFixedActions(); // Clear fixed bar
+                app.clearFixedActions(); 
                 const main = document.getElementById('main-content');
                 const tpl = document.getElementById('tpl-stats').content.cloneNode(true);
                 document.getElementById('header-title').innerText = "Statistieken";
-                // Acties worden in init gezet
                 main.innerHTML = ''; main.appendChild(tpl);
                 app.updateCalendar();
             },
@@ -900,10 +1081,8 @@
                 }
             },
 
-            // NEW: Clear stats UI Logic
             clearStats: async () => {
-                 // Vervang confirm() door een custom modal/toast in een echte app.
-                if (window.confirm("Weet je zeker dat je alle geschiedenis en statistieken wilt wissen? Dit kan niet ongedaan worden gemaakt.")) {
+                if (confirm("Weet je zeker dat je alle geschiedenis en statistieken wilt wissen? Dit kan niet ongedaan worden gemaakt.")) {
                     const success = await DataService.clearHistory();
                     if (success) {
                         app.showToast("Statistieken gewist");
