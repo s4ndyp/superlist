@@ -319,7 +319,8 @@
             getApiBaseUrl: () => localStorage.getItem(API_URL_KEY) || 'http://localhost:8080',
             setApiBaseUrl: (url) => localStorage.setItem(API_URL_KEY, url),
 
-            getToken: () => localStorage.getItem(AuthService.KEY),
+            // FIX: Gebruik de correcte constante TOKEN_KEY in plaats van de ongedefinieerde KEY
+            getToken: () => localStorage.getItem(AuthService.TOKEN_KEY),
             setToken: (token) => localStorage.setItem(AuthService.TOKEN_KEY, token),
             removeToken: () => localStorage.removeItem(AuthService.TOKEN_KEY),
             isAuthenticated: () => !!AuthService.getToken(),
