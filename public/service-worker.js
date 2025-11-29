@@ -1,6 +1,6 @@
 // --- Configuratie ---
 // Zorg voor een nieuwe versie om de cache te forceren
-const CACHE_NAME = 'superlijst-v8';
+const CACHE_NAME = 'superlijst-v9';
 
 // De bestanden die nodig zijn om de app te laden (inclusief externe bibliotheken)
 const urlsToCache = [
