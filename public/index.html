@@ -236,11 +236,19 @@
     </template>
 
     <script>
-        // Unieke ID generator voor lokale items
+        // Unieke ID generator voor lokale items (Robuuste versie met fallback)
         function uuidv4() {
-            return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
-                (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
-            );
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+                    (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+                );
+            } else {
+                // Fallback voor oudere omgevingen of niet-secure contexten
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            }
         }
 
         // Foutcode voor offline mutaties
@@ -388,13 +396,12 @@
         async function apiFetch(path, options = {}) {
             const isMutation = ['POST', 'PUT', 'DELETE'].includes(options.method);
             
-            // Offline check voor mutaties
+            // 1. Check offline status vooraf
             if (!isOnline() && isMutation) {
-                // Als we offline zijn, blokkeren we de mutatie en laten de DataService deze in de wachtrij plaatsen.
                 throw new Error(OFFLINE_MUTATION_BLOCKED);
             }
 
-            // Construeer de volledige URL met de dynamisch opgehaalde basis URL
+            // Construeer de volledige URL
             const apiUrlBase = AuthService.getApiBaseUrl();
             const url = `${apiUrlBase}${path}`;
             
@@ -436,7 +443,14 @@
 
             } catch (error) {
                 console.error('API Fetch Error:', error);
-                // Gooi de fout opnieuw, tenzij we offline zijn, dan blokkeren we de mutatie.
+                
+                // 2. Vang netwerkfouten (fetch faalt) ook op als OFFLINE
+                // TypeError treedt vaak op bij netwerkfouten (DNS, connection refused)
+                // Als het een mutatie is en het is een netwerkfout, forceer offline flow
+                if (isMutation && (error.name === 'TypeError' || error.message.includes('Failed to fetch'))) {
+                    throw new Error(OFFLINE_MUTATION_BLOCKED);
+                }
+
                 throw error;
             }
         }
@@ -478,8 +492,8 @@
             // --- API CALLS MET OFFLINE LOGICA ---
 
             getSavedLists: async () => {
+                // Probeer altijd te fetchen, tenzij expliciet offline
                 if (!isOnline()) {
-                    app.showToast('Offline modus. Toon lokale lijsten.', 'danger');
                     return DataService._getListsFromLocalStorage();
                 }
 
@@ -492,7 +506,7 @@
                     DataService._setListsToLocalStorage(remoteLists); 
                     return remoteLists;
                 } catch (e) {
-                    app.showToast('Fout bij ophalen lijsten. Toon lokale lijsten.', 'danger');
+                    // Bij leesfout, val terug op cache
                     return DataService._getListsFromLocalStorage();
                 }
             },
@@ -529,7 +543,7 @@
                         const mutation = {
                             method,
                             path,
-                            body: networkPayload, // Queue de object ZONDER de .id voor PUT, MET de temp-ID voor POST
+                            body: networkPayload, 
                             apiBaseUrl: AuthService.getApiBaseUrl()
                         };
                         SyncQueue.addMutation(mutation);
@@ -538,7 +552,7 @@
                         // Zorg ervoor dat de lijst direct in de lokale cache wordt bijgewerkt
                         const localLists = DataService._getListsFromLocalStorage();
                         
-                        let updatedLists;
+                        let updatedLists = [];
 
                         if (isNew) {
                             // Voeg de nieuwe lijst met TEMP_ID toe
@@ -556,7 +570,7 @@
                         return { id: localListCopy.id, data: localListCopy, temp: true };
 
                     } else {
-                        throw e; // Gooi andere fouten opnieuw
+                        throw e; // Gooi andere fouten opnieuw (bijv. server validatie errors)
                     }
                 }
             },
@@ -597,7 +611,6 @@
 
             // De geschiedenis endpoints blijven grotendeels hetzelfde (niet-kritieke mutaties)
             getHistory: async () => {
-                 if (!isOnline()) return []; // Toon geen geschiedenis offline
                  try {
                     const history = await apiFetch('/api/history', { method: 'GET' });
                     return (history || []).map(h => h.data);
@@ -607,6 +620,7 @@
             },
             
             addHistory: async (entry) => {
+                // History is niet-kritiek, fail silently offline
                 if (!isOnline()) return;
                 try {
                     await apiFetch('/api/history', { method: 'POST', body: entry });
@@ -982,16 +996,21 @@
                 if (!list.name) return app.showToast("Geef de lijst een naam!", 'danger');
                 if (list.items.length === 0) return app.showToast("Lijst is leeg!", 'danger');
                 
-                const result = await DataService.saveList(list);
+                try {
+                    const result = await DataService.saveList(list);
 
-                if (result) {
-                    list.id = result.id;
-                    if (andShop) {
-                        app.startShoppingMode();
-                    } else {
-                        app.showToast("Lijst opgeslagen");
-                        app.renderDashboard();
+                    if (result) {
+                        list.id = result.id;
+                        if (andShop) {
+                            app.startShoppingMode();
+                        } else {
+                            app.showToast("Lijst opgeslagen");
+                            app.renderDashboard();
+                        }
                     }
+                } catch (err) {
+                    console.error("Save error:", err);
+                    app.showToast("Er ging iets mis bij het opslaan.", 'danger');
                 }
             },
             
