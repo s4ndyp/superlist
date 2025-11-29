@@ -1,3 +1,4 @@
+// s4ndyp/superlist/superlist-a9896143911d468c67ee3d42bf6bcb4a604896db/public/manifest.json
 {
   "name": "SuperLijst",
   "short_name": "SuperLijst",
@@ -8,13 +9,13 @@
   "orientation": "portrait",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/3796/3796063.png",
+      "src": "android-chrome-192x192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/3796/3796063.png",
+      "src": "android-chrome-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
