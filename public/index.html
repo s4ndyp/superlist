@@ -61,7 +61,8 @@
 
         /* Zorg ervoor dat de main content de header niet overlapt (vooral belangrijk als de header 'fixed' zou zijn) */
         main {
-            padding-bottom: env(safe-area-inset-bottom, 1rem); /* Voeg onderaan marge toe voor de home indicator op iOS */
+            /* De padding-bottom wordt nu dynamisch geregeld via JS/Templates */
+            padding-bottom: env(safe-area-inset-bottom, 1rem); 
         }
 
     </style>
@@ -75,8 +76,13 @@
             <div id="header-actions" class="flex gap-3"></div>
         </header>
 
-        <main id="main-content" class="flex-grow p-4 overflow-y-auto pb-32"></main>
+        <!-- Main content: Geen pb-32 meer hier. De padding zit in de template om het scrollen te regelen. -->
+        <main id="main-content" class="flex-grow p-4 overflow-y-auto"></main>
+        
         <div id="notification-container" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-11/12 max-w-sm z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+        <!-- NIEUW: Container voor de vaste actiebalk (buiten main) -->
+        <div id="fixed-action-bar" class="fixed inset-x-0 bottom-0 z-30"></div> 
     </div>
 
     <!-- TEMPLATES -->
@@ -124,7 +130,7 @@
     </template>
 
     <template id="tpl-editor">
-        <div class="flex flex-col h-full animate-fade-in pb-10">
+        <div class="flex flex-col h-full animate-fade-in pb-48">
             <!-- Header Sticky -->
             <div class="mb-4 sticky top-0 bg-dark-900 z-10 py-2 border-b border-gray-800/50">
                 <label class="text-xs text-gray-500 uppercase font-bold ml-1">Lijst Naam</label>
@@ -143,14 +149,21 @@
                 <button onclick="app.addItem()" class="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl w-12 flex items-center justify-center transition shadow-lg shadow-emerald-900/50"><i class="fa-solid fa-plus"></i></button>
             </div>
 
-            <!-- Actions (Centered Yellow Button) -->
-            <div class="flex flex-col items-center gap-4 mt-2 w-full">
-                <button onclick="app.saveAndShop()" class="w-full max-w-xs bg-yellow-400 hover:bg-yellow-300 text-black font-extrabold text-lg py-4 rounded-2xl shadow-xl shadow-yellow-900/20 transform transition hover:scale-[1.02] flex items-center justify-center gap-2">
+            <!-- ACTIE KNOPPEN ZIJN VERPLAATST NAAR tpl-editor-actions -->
+        </div>
+    </template>
+    
+    <!-- NIEUWE TEMPLATE: VASTE ACTIEBALK VOOR EDITOR -->
+    <template id="tpl-editor-actions">
+        <!-- Vaste actiebalk, rekening houdend met de veilige zone onderaan -->
+        <div id="editor-actions-fixed-bar" class="bg-dark-800/95 backdrop-blur-md px-4 pt-4 border-t border-gray-700 w-full animate-slide-up" style="padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));">
+            <div class="flex flex-col items-center gap-4 w-full max-w-xs mx-auto">
+                <button onclick="app.saveAndShop()" class="w-full bg-yellow-400 hover:bg-yellow-300 text-black font-extrabold text-lg py-4 rounded-2xl shadow-xl shadow-yellow-900/20 transform transition hover:scale-[1.02] flex items-center justify-center gap-2">
                     <i class="fa-solid fa-cart-shopping"></i> Start Winkelen
                 </button>
                 
                 <!-- Split Buttons -->
-                <div class="grid grid-cols-2 gap-4 w-full max-w-xs mt-2">
+                <div class="grid grid-cols-2 gap-4 w-full mt-1">
                     <button onclick="app.renderDashboard()" class="text-gray-500 hover:text-white py-3 rounded-xl border border-gray-700 hover:border-gray-500 transition text-sm font-medium">
                         Annuleren
                     </button>
@@ -161,6 +174,7 @@
             </div>
         </div>
     </template>
+
 
     <template id="tpl-shopping">
         <div class="flex flex-col h-full animate-fade-in pb-24">
@@ -525,6 +539,9 @@
             currentList: null, shoppingList: [], undoState: null, statsDate: new Date(),
 
             init: () => { 
+                // Zorg ervoor dat de vaste actiebalk leeg is bij opstarten
+                document.getElementById('fixed-action-bar').innerHTML = '';
+
                 if (AuthService.isAuthenticated()) {
                     app.renderDashboard(); 
                     document.getElementById('header-actions').innerHTML = `
@@ -536,6 +553,11 @@
                 }
             },
             
+            // NIEUWE HELPER: Leeg de vaste actiebalk
+            clearFixedActions: () => {
+                document.getElementById('fixed-action-bar').innerHTML = '';
+            },
+
             // --- UI HELPERS ---
             showToast: (msg, type = 'success', undoCallback = null) => {
                 const container = document.getElementById('notification-container');
@@ -567,6 +589,7 @@
 
             // --- VIEW: Auth ---
             renderAuth: () => {
+                app.clearFixedActions(); // Clear fixed bar
                 document.getElementById('main-content').innerHTML = '';
                 const tpl = document.getElementById('tpl-auth').content.cloneNode(true);
                 
@@ -583,6 +606,7 @@
 
             // --- VIEW: Dashboard ---
             renderDashboard: async () => {
+                app.clearFixedActions(); // Clear fixed bar
                 const main = document.getElementById('main-content');
                 const tpl = document.getElementById('tpl-dashboard').content.cloneNode(true);
                 const savedContainer = tpl.getElementById('saved-list-container');
@@ -675,7 +699,15 @@
                 document.getElementById('header-title').innerText = "Bewerken";
                 document.getElementById('header-actions').innerHTML = `<button onclick="app.shareList()" class="text-emerald-500 hover:text-white transition" title="Delen"><i class="fa-solid fa-share-nodes"></i></button>`;
                 
-                main.innerHTML = ''; main.appendChild(tpl);
+                main.innerHTML = ''; 
+                main.appendChild(tpl);
+                
+                // NIEUW: Render de vaste actiebalk
+                const fixedBarTpl = document.getElementById('tpl-editor-actions').content.cloneNode(true);
+                document.getElementById('fixed-action-bar').innerHTML = '';
+                document.getElementById('fixed-action-bar').appendChild(fixedBarTpl);
+
+
                 new Sortable(document.getElementById('editor-items'), {
                     animation: 150, handle: '.drag-handle', ghostClass: 'sortable-ghost', dragClass: 'sortable-drag',
                     onEnd: (evt) => {
@@ -784,6 +816,7 @@
                 app.renderShopping();
             },
             renderShopping: () => {
+                app.clearFixedActions(); // Clear fixed bar
                 const main = document.getElementById('main-content');
                 const tpl = document.getElementById('tpl-shopping').content.cloneNode(true);
                 tpl.getElementById('shopping-title').innerText = app.currentList.name || "Boodschappen";
@@ -820,6 +853,7 @@
 
             // --- VIEW: Stats ---
             renderStats: () => {
+                app.clearFixedActions(); // Clear fixed bar
                 const main = document.getElementById('main-content');
                 const tpl = document.getElementById('tpl-stats').content.cloneNode(true);
                 document.getElementById('header-title').innerText = "Statistieken";
