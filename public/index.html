@@ -433,6 +433,11 @@
                 }
 
                 if (!response.ok) {
+                    // Check voor 404/5xx fouten TIJDENS mutatie = proxy/server down = OFFLINE
+                    if (isMutation && [404, 500, 502, 503, 504].includes(response.status)) {
+                        throw new Error(OFFLINE_MUTATION_BLOCKED);
+                    }
+
                     let errorData = {};
                     try { errorData = await response.json(); } catch {}
                     throw new Error(errorData.error || `Netwerkfout: ${response.status}`);
@@ -447,7 +452,8 @@
                 // 2. Vang netwerkfouten (fetch faalt) ook op als OFFLINE
                 // Verwijder specifieke string checks (Failed to fetch) omdat deze taalafhankelijk zijn.
                 // Als het een mutatie is en we vangen een TypeError (standaard netwerkfout bij fetch),
-                // en het is GEEN auth error die we zelf gooiden, dan is het een offline situatie.
+                // en het is GEEN auth error die we zelf gooiden, en GEEN expliciete Offline Block (want die moeten we rethrowen),
+                // dan is het een offline situatie.
                 if (isMutation && error.name === 'TypeError' && error.message !== 'Authenticatie vereist.' && error.message !== 'Sessie verlopen') {
                      throw new Error(OFFLINE_MUTATION_BLOCKED);
                 }
@@ -953,44 +959,6 @@
                 app.currentList.items.splice(index, 1);
                 app.renderEditor(false);
                 app.showToast("Item verwijderd", 'success', app.handleUndo);
-            },
-            
-            // --- Actions ---
-            startVoiceInput: () => {
-                if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { 
-                    app.showToast("Je browser ondersteunt spraakinvoer niet.", 'danger'); 
-                    return; 
-                }
-                const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-                const rec = new SR(); rec.lang = 'nl-NL'; rec.interimResults = false;
-                const mic = document.getElementById('mic-icon'); mic.className = "fa-solid fa-microphone-lines text-red-500 animate-pulse";
-                rec.start();
-                rec.onresult = (e) => { 
-                    document.getElementById('new-item-input').value = e.results[0][0].transcript; 
-                    mic.className = "fa-solid fa-microphone"; 
-                    document.getElementById('new-item-input').focus(); 
-                };
-                rec.onend = () => mic.className = "fa-solid fa-microphone";
-                rec.onerror = (e) => {
-                    mic.className = "fa-solid fa-microphone";
-                    if (e.error !== 'no-speech' && e.error !== 'not-allowed') {
-                        app.showToast(`Spraakfout: ${e.error}`, 'danger');
-                    }
-                }
-            },
-            shareList: () => {
-                const text = (app.currentList.items || []).map(i => `- ${i.name}`).join('\n');
-                const full = `Boodschappenlijst: ${app.currentList.name}\n\n${text}`;
-                if (navigator.share) navigator.share({ title: app.currentList.name, text: full }).catch(console.error);
-                else { 
-                    const tempInput = document.createElement('textarea');
-                    tempInput.value = full;
-                    document.body.appendChild(tempInput);
-                    tempInput.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(tempInput);
-                    app.showToast("Lijst gekopieerd naar klembord"); 
-                }
             },
             
             // --- UPDATED: Show actual error message in toast ---
