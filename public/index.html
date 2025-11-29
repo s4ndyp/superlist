@@ -259,8 +259,6 @@
                     .then(reg => {
                         console.log('SW geregistreerd!', reg.scope);
                         // Luister naar berichten van de Service Worker (voor SYNC_SUCCESS)
-                        // app.handleSWMessage wordt later gedefinieerd, maar dat is prima,
-                        // want de listener wordt pas actief bij het ontvangen van een bericht.
                         navigator.serviceWorker.addEventListener('message', app.handleSWMessage); 
                     })
                     .catch(err => console.log('SW mislukt:', err));
@@ -321,7 +319,7 @@
             getApiBaseUrl: () => localStorage.getItem(API_URL_KEY) || 'http://localhost:8080',
             setApiBaseUrl: (url) => localStorage.setItem(API_URL_KEY, url),
 
-            getToken: () => localStorage.getItem(AuthService.TOKEN_KEY),
+            getToken: () => localStorage.getItem(AuthService.KEY),
             setToken: (token) => localStorage.setItem(AuthService.TOKEN_KEY, token),
             removeToken: () => localStorage.removeItem(AuthService.TOKEN_KEY),
             isAuthenticated: () => !!AuthService.getToken(),
@@ -502,21 +500,26 @@
                 const isNew = !listObj.id || listObj.id.startsWith(TEMP_ID_PREFIX);
                 const method = isNew ? 'POST' : 'PUT';
                 const path = isNew ? '/api/lists' : `/api/lists/${listObj.id}`;
-                const dataToSend = { ...listObj };
+                
+                // 1. Maak een kopie voor lokale opslag (deze moet het ID behouden)
+                const localListCopy = { ...listObj }; 
+
+                // 2. Maak de payload voor het netwerk (deze mag geen client-ID's of _id bevatten)
+                const networkPayload = { ...listObj };
+                delete networkPayload.id; // Verwijder de client ID
+                delete networkPayload._id; // Verwijder MongoDB ID indien aanwezig
 
                 if (isNew) {
-                    // Genereer een tijdelijke ID voor lokale weergave
-                    dataToSend.id = `${TEMP_ID_PREFIX}${uuidv4()}`; 
-                    delete dataToSend._id;
-                } else {
-                    delete dataToSend.id; 
-                    delete dataToSend._id; 
+                    // Genereer een tijdelijke ID voor de lokale kopie en queue tracking
+                    const tempId = `${TEMP_ID_PREFIX}${uuidv4()}`;
+                    localListCopy.id = tempId; 
+                    networkPayload.id = tempId; // Zorg dat de queue payload de tempId bevat
                 }
                 
                 try {
-                    const response = await apiFetch(path, { method, body: dataToSend });
+                    const response = await apiFetch(path, { method, body: networkPayload });
                     
-                    // Op succes: ververs de volledige lijst om de nieuwe ID op te halen (voor POST)
+                    // Op succes: API retourneert de definitieve ID.
                     return response;
                     
                 } catch (e) {
@@ -525,29 +528,31 @@
                         const mutation = {
                             method,
                             path,
-                            body: dataToSend,
+                            body: networkPayload, // Queue de object ZONDER de .id voor PUT, MET de temp-ID voor POST
                             apiBaseUrl: AuthService.getApiBaseUrl()
                         };
                         SyncQueue.addMutation(mutation);
-                        app.showToast(`Lijst "${listObj.name}" lokaal opgeslagen. Synchroniseert zodra je online bent.`, 'success');
+                        app.showToast(`Lijst "${localListCopy.name}" lokaal opgeslagen. Synchroniseert zodra je online bent.`, 'success');
                         
                         // Zorg ervoor dat de lijst direct in de lokale cache wordt bijgewerkt
                         const localLists = DataService._getListsFromLocalStorage();
                         
-                        let updatedLists = localLists;
+                        let updatedLists;
 
                         if (isNew) {
                             // Voeg de nieuwe lijst met TEMP_ID toe
-                            updatedLists.push({ id: dataToSend.id, data: dataToSend, temp: true });
+                            updatedLists = [...localLists, { id: localListCopy.id, data: localListCopy, temp: true }];
                         } else {
                             // Vind en update de bestaande lokale lijst (PUT)
                             updatedLists = localLists.map(l => 
-                                l.id === listObj.id ? { id: listObj.id, data: dataToSend } : l
+                                l.id === localListCopy.id ? { id: localListCopy.id, data: localListCopy } : l
                             );
                         }
                         
                         DataService._setListsToLocalStorage(updatedLists);
-                        return { id: dataToSend.id, data: dataToSend, temp: true };
+                        
+                        // BELANGRIJK: Retourneer de lokale kopie zodat app.saveListAction kan doorgaan met renderen
+                        return { id: localListCopy.id, data: localListCopy, temp: true };
 
                     } else {
                         throw e; // Gooi andere fouten opnieuw
@@ -629,7 +634,7 @@
          * APP LOGIC
          * ------------------------------------------------------------------
          */
-        var app = { // GEWIJZIGD VAN const NAAR var
+        var app = { 
             currentList: null, shoppingList: [], undoState: null, statsDate: new Date(),
 
             init: () => { 
