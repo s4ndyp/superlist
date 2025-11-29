@@ -628,6 +628,23 @@
             },
             
             deleteList: async (id) => {
+                // NIEUW: Behandel tijdelijke ID's direct lokaal
+                if (id.startsWith(TEMP_ID_PREFIX)) {
+                    // Verwijder uit lokale opslag
+                    const localLists = DataService._getListsFromLocalStorage().filter(l => l.id !== id);
+                    DataService._setListsToLocalStorage(localLists);
+
+                    // Verwijder eventuele pending acties uit de sync queue
+                    // Dit voorkomt dat een verwijderde lijst later alsnog aangemaakt wordt
+                    let queue = SyncQueue.getQueue();
+                    // Filter alle acties die met dit ID te maken hebben (bijv. de oorspronkelijke POST)
+                    queue = queue.filter(m => !m.body || m.body.id !== id);
+                    SyncQueue.setQueue(queue);
+
+                    return true;
+                }
+
+                // Oorspronkelijke logica voor echte server-ID's
                 const path = `/api/lists/${id}`;
                 try {
                     await apiFetch(path, { method: 'DELETE' });
