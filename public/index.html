@@ -1122,13 +1122,12 @@
                 }
             },
 
+            // NEW: Clear stats UI Logic
             clearStats: async () => {
                 if (confirm("Weet je zeker dat je alle geschiedenis en statistieken wilt wissen? Dit kan niet ongedaan worden gemaakt.")) {
-                    const success = await DataService.clearHistory();
-                    if (success) {
-                        app.showToast("Statistieken gewist");
-                        app.renderStats(); 
-                    }
+                    await DataService.clearHistory();
+                    app.showToast("Statistieken gewist");
+                    app.renderStats(); 
                 }
             }
         };
