@@ -506,12 +506,52 @@
 
                 try {
                     const lists = await apiFetch('/api/lists', { method: 'GET' });
-                    // API antwoord is al een array van {id: 'mongo_id', data: {...}} objecten
-                    const remoteLists = lists || [];
                     
-                    // Sla de gesynchroniseerde lijsten lokaal op
+                    // --- OPTIMISTIC MERGING (Cruciaal voor offline sync) ---
+                    // Als we online komen, is de server nog NIET op de hoogte van de wachtrij.
+                    // We moeten de server-data combineren met de lokale wachtrij.
+                    
+                    let remoteLists = lists || [];
+                    const queue = SyncQueue.getQueue();
+
+                    // 1. Verwijder lijsten die in de wachtrij staan om VERWIJDERD te worden
+                    const pendingDeletes = queue.filter(m => m.method === 'DELETE').map(m => m.body.id);
+                    remoteLists = remoteLists.filter(l => !pendingDeletes.includes(l.id));
+
+                    // 2. Voeg nieuwe lijsten toe die nog in de wachtrij staan (POST)
+                    const pendingCreates = queue.filter(m => m.method === 'POST' && m.path === '/api/lists');
+                    pendingCreates.forEach(mutation => {
+                        // Check of hij niet al in de lijst staat (dubbelingen voorkomen)
+                        if (!remoteLists.find(l => l.id === mutation.body.id)) {
+                             // Let op: mutation.body bevat de lijst data. De ID zit in mutation.body.id (temp id)
+                             remoteLists.push({
+                                id: mutation.body.id,
+                                data: mutation.body,
+                                temp: true // Markeer als offline/bezig met sync
+                            });
+                        }
+                    });
+
+                    // 3. Pas updates toe die nog in de wachtrij staan (PUT)
+                    const pendingUpdates = queue.filter(m => m.method === 'PUT');
+                    pendingUpdates.forEach(mutation => {
+                         // Haal ID uit path (bijv /api/lists/xxx)
+                         const parts = mutation.path.split('/');
+                         const targetId = parts[parts.length - 1];
+                         
+                         const listIndex = remoteLists.findIndex(l => l.id === targetId);
+                         if (listIndex > -1) {
+                             // Overschrijf met de nieuwere lokale versie uit de wachtrij
+                             remoteLists[listIndex].data = mutation.body;
+                             remoteLists[listIndex].temp = true; 
+                         }
+                    });
+                    // --- EINDE MERGING ---
+
+                    // Sla de gecombineerde lijst op
                     DataService._setListsToLocalStorage(remoteLists); 
                     return remoteLists;
+
                 } catch (e) {
                     // Bij leesfout, val terug op cache
                     return DataService._getListsFromLocalStorage();
