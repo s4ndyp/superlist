@@ -18,11 +18,13 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
     
     <script>
+        // Configuratie voor Tailwind CSS
         tailwind.config = {
             theme: {
                 extend: {
                     colors: {
-                        dark: { 900: '#0f172a', 800: '#1e293b', 700: '#334155' },
+                        dark: { 900: '#0f172a', 800: '#1e293b', 700: '#334155' }
+                        ,
                         accent: { 500: '#10b981', 600: '#059669' }
                     },
                     animation: { 'fade-in': 'fadeIn 0.3s ease-out', 'slide-up': 'slideUp 0.3s ease-out' },
@@ -36,19 +38,39 @@
     </script>
 
     <style>
-        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+        body { 
+            font-family: 'Inter', sans-serif; 
+            -webkit-tap-highlight-color: transparent; 
+            overscroll-behavior-y: none; 
+            /* Zorg ervoor dat de body content rekening houdt met de veilige gebieden */
+            padding-top: env(safe-area-inset-top);
+        }
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
         .sortable-ghost { opacity: 0.4; background: #334155; }
         .sortable-drag { cursor: grabbing; }
         .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.5rem; }
+
+        /* BELANGRIJKE AANPASSING: Gebruik safe-area-inset-top voor de header padding */
+        .safe-header {
+            padding-top: calc(1rem + env(safe-area-inset-top, 0px));
+            /* Haal de standaard padding-top van p-4 (1rem) eraf, omdat die nu in de calc zit */
+            padding-bottom: 1rem;
+        }
+
+        /* Zorg ervoor dat de main content de header niet overlapt (vooral belangrijk als de header 'fixed' zou zijn) */
+        main {
+            padding-bottom: env(safe-area-inset-bottom, 1rem); /* Voeg onderaan marge toe voor de home indicator op iOS */
+        }
+
     </style>
 </head>
 <body class="bg-dark-900 text-slate-100 min-h-screen flex flex-col items-center overflow-hidden">
 
     <div id="app" class="w-full max-w-md h-[100dvh] bg-dark-900 shadow-2xl relative flex flex-col">
-        <header class="p-4 bg-dark-800/90 backdrop-blur-md z-20 border-b border-gray-700/50 flex justify-between items-center shrink-0">
+        <!-- AANGEPASTE HEADER: gebruik de safe-header class -->
+        <header class="safe-header px-4 bg-dark-800/90 backdrop-blur-md z-20 border-b border-gray-700/50 flex justify-between items-center shrink-0">
             <h1 id="header-title" class="text-xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-500 bg-clip-text text-transparent">SuperLijst</h1>
             <div id="header-actions" class="flex gap-3"></div>
         </header>
@@ -58,13 +80,39 @@
     </div>
 
     <!-- TEMPLATES -->
+    
+    <!-- NIEUWE TEMPLATE: AUTHENTICATIE -->
+    <template id="tpl-auth">
+        <div class="flex flex-col items-center justify-center h-full p-8 animate-fade-in">
+            <h2 class="text-3xl font-bold text-white mb-6">Inloggen</h2>
+            <div class="w-full bg-dark-800 p-6 rounded-xl shadow-lg border border-gray-700">
+                <p class="text-gray-400 mb-4 text-sm">Gebruik je API Gateway gebruikersnaam en wachtwoord om in te loggen.</p>
+                
+                <!-- NIEUW: API URL VELD -->
+                <label class="text-xs text-gray-400 mb-1 block">API Basis URL (incl. poort)</label>
+                <input type="url" id="api-url-input" class="w-full bg-dark-900 rounded-lg px-4 py-3 mb-3 text-white placeholder-gray-500 outline-none border border-gray-700 focus:ring-2 focus:ring-cyan-500" placeholder="http://localhost:8080" required>
+                
+                <label class="text-xs text-gray-400 mb-1 block">Gebruikersnaam</label>
+                <input type="text" id="auth-username" class="w-full bg-dark-900 rounded-lg px-4 py-3 mb-3 text-white placeholder-gray-500 outline-none border border-gray-700 focus:ring-2 focus:ring-emerald-500" placeholder="Gebruikersnaam" required>
+                
+                <label class="text-xs text-gray-400 mb-1 block">Wachtwoord</label>
+                <input type="password" id="auth-password" class="w-full bg-dark-900 rounded-lg px-4 py-3 mb-6 text-white placeholder-gray-500 outline-none border border-gray-700 focus:ring-2 focus:ring-emerald-500" placeholder="Wachtwoord" required onkeypress="if(event.key === 'Enter') AuthService.login()">
+                
+                <button onclick="AuthService.login()" id="login-button" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-lg transition shadow-md shadow-emerald-900/50">
+                    Log In
+                </button>
+            </div>
+            <p id="auth-error-message" class="text-red-400 mt-4 text-sm hidden"></p>
+        </div>
+    </template>
+
     <template id="tpl-dashboard">
         <div class="space-y-6 animate-fade-in pb-10">
             <div>
                 <h2 class="text-xs uppercase tracking-wider text-gray-500 font-bold mb-3 pl-1">Sjablonen</h2>
                 <div id="predefined-list-container" class="grid grid-cols-1 gap-3"></div>
             </div>
-            <div id="saved-section" class="hidden">
+            <div id="saved-section">
                 <h2 class="text-xs uppercase tracking-wider text-gray-500 font-bold mb-3 pl-1">Mijn Lijsten</h2>
                 <div id="saved-list-container" class="grid grid-cols-1 gap-3"></div>
             </div>
@@ -184,9 +232,147 @@
                     .catch(err => console.log('SW mislukt:', err));
             });
         }
+        
+        // ************************************************************
+        // API BASIS URL CONSTANTE (WORDT GECONTROLEERD DOOR AUTH SERVICE)
+        // ************************************************************
+        const API_URL_KEY = 'superlijst_api_url';
+
 
         /**
-         * DATA SERVICE (HYBRID: API FIRST, LOCALSTORAGE BACKUP)
+         * ------------------------------------------------------------------
+         * AUTHENTICATION SERVICE (JWT Handling)
+         * ------------------------------------------------------------------
+         */
+        const AuthService = {
+            TOKEN_KEY: 'superlijst_jwt_token',
+
+            // Functies voor de API URL
+            getApiBaseUrl: () => localStorage.getItem(API_URL_KEY) || 'http://localhost:8080',
+            setApiBaseUrl: (url) => localStorage.setItem(API_URL_KEY, url),
+
+            getToken: () => localStorage.getItem(AuthService.TOKEN_KEY),
+            setToken: (token) => localStorage.setItem(AuthService.TOKEN_KEY, token),
+            removeToken: () => localStorage.removeItem(AuthService.TOKEN_KEY),
+            isAuthenticated: () => !!AuthService.getToken(),
+
+            // JWT login call
+            login: async () => {
+                const apiUrlInput = document.getElementById('api-url-input');
+                const username = document.getElementById('auth-username').value;
+                const password = document.getElementById('auth-password').value;
+                const loginButton = document.getElementById('login-button');
+                const errorMessage = document.getElementById('auth-error-message');
+                
+                // 1. URL opslaan en valideren
+                const newApiUrl = apiUrlInput.value.trim().replace(/\/+$/, ''); // Verwijder trailing slash
+                if (!newApiUrl || !newApiUrl.startsWith('http')) {
+                    errorMessage.innerText = 'Ongeldige URL. Moet met http of https beginnen.';
+                    errorMessage.classList.remove('hidden');
+                    return;
+                }
+                AuthService.setApiBaseUrl(newApiUrl); // Sla de nieuwe URL op
+                
+                loginButton.disabled = true;
+                loginButton.innerText = 'Bezig met inloggen...';
+                errorMessage.classList.add('hidden');
+                
+                // Gebruik de dynamisch ingestelde URL
+                const API_URL_LOGIN = `${newApiUrl}/api/auth/login`;
+
+                try {
+                    const response = await fetch(API_URL_LOGIN, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, password })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok && data.token) {
+                        AuthService.setToken(data.token);
+                        app.init(); // Herstart de app na succesvolle login
+                    } else {
+                        throw new Error(data.error || 'Onbekende inlogfout');
+                    }
+                } catch (error) {
+                    errorMessage.innerText = `Fout: Kan niet verbinden met API. (${error.message})`;
+                    errorMessage.classList.remove('hidden');
+                    console.error('Login error:', error);
+                    loginButton.disabled = false;
+                    loginButton.innerText = 'Log In';
+                }
+            },
+
+            logout: () => {
+                AuthService.removeToken();
+                app.renderAuth();
+            }
+        };
+
+
+        /**
+         * ------------------------------------------------------------------
+         * API HELPER (Fetch Wrapper met JWT)
+         * ------------------------------------------------------------------
+         */
+        async function apiFetch(path, options = {}) {
+            // Construeer de volledige URL met de dynamisch opgehaalde basis URL
+            const url = `${AuthService.getApiBaseUrl()}${path}`;
+            
+            const token = AuthService.getToken();
+            if (!token) {
+                // Als er geen token is, dwing de gebruiker naar het inlogscherm
+                app.renderAuth();
+                throw new Error('Authenticatie vereist.');
+            }
+
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                ...options.headers
+            };
+
+            const config = {
+                ...options,
+                headers,
+                // Voor PUT/POST/DELETE sturen we JSON. Voor GET kan de body weg.
+                body: options.body ? JSON.stringify(options.body) : undefined
+            };
+
+            try {
+                const response = await fetch(url, config);
+
+                if (response.status === 401) {
+                    // JWT verlopen of ongeldig
+                    AuthService.logout();
+                    app.showToast('Sessie verlopen. Gelieve opnieuw in te loggen.', 'danger');
+                    throw new Error('Sessie verlopen');
+                }
+
+                if (!response.ok) {
+                    let errorData = {};
+                    try { errorData = await response.json(); } catch {}
+                    throw new Error(errorData.error || `Netwerkfout: ${response.status}`);
+                }
+                
+                // Bij 204 (No Content, zoals DELETE) geven we null terug
+                if (response.status === 204) return null;
+
+                return await response.json();
+
+            } catch (error) {
+                // Bijv. Netwerkfout
+                console.error('API Fetch Error:', error);
+                throw error;
+            }
+        }
+
+
+        /**
+         * ------------------------------------------------------------------
+         * DATA SERVICE (API EERST)
+         * ------------------------------------------------------------------
          */
         const DataService = {
             _rawPredefined: [
@@ -194,6 +380,7 @@
                 { id: 'p2', name: 'Ontbijt', items: [{ name: '2 liter Melk' }, { name: '1 heel Brood' }, { name: 'Doosje Eieren' }, { name: 'Plakjes Kaas' }] }
             ],
 
+            // Standaard sjabloon logica blijft lokaal
             getPredefinedLists: () => {
                 const hidden = JSON.parse(localStorage.getItem('hiddenPredefined') || '[]');
                 return DataService._rawPredefined.filter(l => !hidden.includes(l.id));
@@ -209,114 +396,154 @@
                 localStorage.setItem('hiddenPredefined', JSON.stringify(hidden));
             },
 
-            // --- HYBRID API CALLS ---
-            // Tries Server API first, falls back to LocalStorage on error (e.g. Preview mode or Offline)
+            // --- API CALLS ---
 
+            /**
+             * Haalt alle opgeslagen lijsten op.
+             * Gebruikt: GET /api/lists
+             * @returns {Promise<Array>} Array of list objects (met id en data veld)
+             */
             getSavedLists: async () => {
                 try {
-                    const response = await fetch('/api/lists');
-                    if (!response.ok) throw new Error('Network/Server error');
-                    return await response.json();
+                    // We gebruiken de generieke GET /api/lists route
+                    const lists = await apiFetch('/api/lists');
+                    // Het API antwoord is al een array van {id: 'mongo_id', data: {...}} objecten
+                    return lists || [];
                 } catch (e) {
-                    // LocalStorage Fallback
-                    const saved = localStorage.getItem('myLists');
-                    let lists = saved ? JSON.parse(saved) : [];
-                    lists.forEach(list => {
-                        list.items = list.items.map(item => {
-                            if (typeof item === 'string') return { name: item };
-                            if (item.qty || item.unit) {
-                                let prefix = '';
-                                if (item.qty && item.qty > 0) prefix += item.qty + ' ';
-                                if (item.unit) prefix += item.unit + ' ';
-                                const newName = (prefix + item.name).trim();
-                                return { name: newName };
-                            }
-                            return item;
-                        });
-                    });
-                    return lists;
+                    app.showToast('Fout bij ophalen lijsten.', 'danger');
+                    return [];
                 }
             },
             
+            /**
+             * Slaat een nieuwe lijst op (POST) of update een bestaande (PUT).
+             * Gebruikt: POST /api/lists of PUT /api/lists/<id>
+             * @param {Object} listObj - De lijst data ({name, items}) inclusief optioneel 'id'.
+             * @returns {Promise<Object>} Het opgeslagen/geüpdatete list object.
+             */
             saveList: async (listObj) => {
                 try {
-                    await fetch('/api/lists', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(listObj)
-                    });
+                    const dataToSend = { ...listObj };
+                    delete dataToSend.id; // ID mag niet in de body
+                    
+                    if (listObj.id) {
+                        // PUT: Update bestaande
+                        const response = await apiFetch(`/api/lists/${listObj.id}`, {
+                            method: 'PUT',
+                            body: dataToSend
+                        });
+                        return response;
+                    } else {
+                        // POST: Nieuwe lijst
+                        const response = await apiFetch('/api/lists', {
+                            method: 'POST',
+                            body: dataToSend
+                        });
+                        return response;
+                    }
                 } catch (e) {
-                    let lists = JSON.parse(localStorage.getItem('myLists') || '[]');
-                    const index = lists.findIndex(l => l.id === listObj.id);
-                    if (index >= 0) lists[index] = listObj;
-                    else lists.push(listObj);
-                    localStorage.setItem('myLists', JSON.stringify(lists));
+                    app.showToast(`Fout bij opslaan van lijst: ${e.message}`, 'danger');
+                    return null;
                 }
             },
             
+            /**
+             * Verwijdert een lijst.
+             * Gebruikt: DELETE /api/lists/<id>
+             * @param {string} id - De MongoDB ID van de lijst.
+             */
             deleteList: async (id) => {
                 try {
-                    await fetch(`/api/lists/${id}`, { method: 'DELETE' });
+                    // API Fetch handelt de DELETE /api/lists/<id> call af
+                    await apiFetch(`/api/lists/${id}`, { method: 'DELETE' });
+                    return true;
                 } catch (e) {
-                    let lists = JSON.parse(localStorage.getItem('myLists') || '[]');
-                    lists = lists.filter(l => l.id !== id);
-                    localStorage.setItem('myLists', JSON.stringify(lists));
+                    app.showToast(`Fout bij verwijderen lijst: ${e.message}`, 'danger');
+                    return false;
                 }
             },
 
+            // Restore is een save
             restoreList: async (listObj) => { 
                 await DataService.saveList(listObj); 
             },
 
+            /**
+             * Haalt de winkelgeschiedenis op.
+             * Gebruikt: GET /api/history
+             * @returns {Promise<Array>} Array of history entries.
+             */
             getHistory: async () => {
                 try {
-                    const response = await fetch('/api/history');
-                    if (!response.ok) throw new Error('Network error');
-                    return await response.json();
+                    const history = await apiFetch('/api/history');
+                    // API antwoord is een array van {id: 'mongo_id', data: {...}} objecten
+                    return (history || []).map(h => h.data);
                 } catch (e) { 
-                    const h = localStorage.getItem('shoppingHistory');
-                    return h ? JSON.parse(h) : [];
+                    app.showToast('Fout bij ophalen geschiedenis.', 'danger');
+                    return [];
                 }
             },
             
+            /**
+             * Voegt een geschiedenis entry toe.
+             * Gebruikt: POST /api/history
+             * @param {Object} entry - {date: ISOString, itemCount: number}
+             */
             addHistory: async (entry) => {
                 try {
-                    await fetch('/api/history', {
+                    await apiFetch('/api/history', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(entry)
+                        body: entry
                     });
                 } catch (e) { 
-                    const history = JSON.parse(localStorage.getItem('shoppingHistory') || '[]');
-                    history.push(entry);
-                    localStorage.setItem('shoppingHistory', JSON.stringify(history));
+                    app.showToast(`Fout bij opslaan geschiedenis: ${e.message}`, 'danger');
                 }
             },
 
+            /**
+             * Verwijdert alle geschiedenis.
+             * Gebruikt: DELETE /api/history?action=deleteAll
+             */
             clearHistory: async () => {
-                localStorage.removeItem('shoppingHistory');
-                try {
-                    await fetch('/api/history', { method: 'DELETE' });
+                 try {
+                    // Gebruikt de DELETE /api/<endpoint>?query=... route om een bulk delete uit te voeren
+                    const result = await apiFetch('/api/history?action=deleteAll', { method: 'DELETE' });
+                    return result; 
                 } catch (e) {
-                    // Ignore offline errors for delete
+                    app.showToast(`Fout bij wissen geschiedenis: ${e.message}`, 'danger');
+                    return false;
                 }
-                return true; 
             }
         };
 
         /**
+         * ------------------------------------------------------------------
          * APP LOGIC
+         * ------------------------------------------------------------------
          */
         const app = {
             currentList: null, shoppingList: [], undoState: null, statsDate: new Date(),
 
-            init: () => { app.renderDashboard(); },
+            init: () => { 
+                if (AuthService.isAuthenticated()) {
+                    app.renderDashboard(); 
+                    document.getElementById('header-actions').innerHTML = `
+                        <button onclick="app.renderStats()" class="text-gray-400 hover:text-cyan-400 transition" title="Statistieken"><i class="fa-solid fa-chart-simple"></i></button>
+                        <button onclick="AuthService.logout()" class="text-gray-400 hover:text-red-400 transition" title="Uitloggen"><i class="fa-solid fa-right-from-bracket"></i></button>
+                    `;
+                } else {
+                    app.renderAuth();
+                }
+            },
             
             // --- UI HELPERS ---
-            showToast: (msg, undoCallback = null) => {
+            showToast: (msg, type = 'success', undoCallback = null) => {
                 const container = document.getElementById('notification-container');
                 const el = document.createElement('div');
-                el.className = "bg-dark-800 text-white px-4 py-3 rounded-lg shadow-xl border border-gray-700 flex justify-between items-center animate-slide-up pointer-events-auto";
+                const color = type === 'danger' ? 'bg-red-500/10 border-red-500' : 'bg-dark-800 border-gray-700';
+                const text = type === 'danger' ? 'text-red-400' : 'text-white';
+
+                el.className = `${color} ${text} px-4 py-3 rounded-lg shadow-xl border flex justify-between items-center animate-slide-up pointer-events-auto`;
                 let html = `<span class="text-sm font-medium mr-4">${msg}</span>`;
                 if (undoCallback) html += `<button id="undo-btn" class="text-emerald-400 font-bold text-sm hover:text-emerald-300 uppercase tracking-wide">Herstel</button>`;
                 el.innerHTML = html;
@@ -338,6 +565,22 @@
                 app.undoState = null;
             },
 
+            // --- VIEW: Auth ---
+            renderAuth: () => {
+                document.getElementById('main-content').innerHTML = '';
+                const tpl = document.getElementById('tpl-auth').content.cloneNode(true);
+                
+                // Vul het URL veld in met de laatst opgeslagen of standaardwaarde
+                const apiUrlInput = tpl.getElementById('api-url-input');
+                if (apiUrlInput) {
+                    apiUrlInput.value = AuthService.getApiBaseUrl();
+                }
+                
+                document.getElementById('main-content').appendChild(tpl);
+                document.getElementById('header-title').innerText = "SuperLijst";
+                document.getElementById('header-actions').innerHTML = '';
+            },
+
             // --- VIEW: Dashboard ---
             renderDashboard: async () => {
                 const main = document.getElementById('main-content');
@@ -347,18 +590,25 @@
                 const predefinedContainer = tpl.getElementById('predefined-list-container');
 
                 document.getElementById('header-title').innerText = "SuperLijst";
-                document.getElementById('header-actions').innerHTML = `
-                <button onclick="app.renderStats()" class="text-gray-400 hover:text-cyan-400 transition" title="Statistieken"><i class="fa-solid fa-chart-simple"></i></button>`;
+                // De acties worden al in app.init() gezet na login
 
                 const visiblePredefined = DataService.getPredefinedLists();
                 visiblePredefined.forEach(list => predefinedContainer.appendChild(app.createListCard(list, false)));
 
-                // Fetch data (will use Hybrid Service)
-                const savedLists = await DataService.getSavedLists();
+                // Fetch data from API
+                const apiResponse = await DataService.getSavedLists();
+                // Map de API response: {id: 'mongo_id', data: {name: '...', items: [...]}} -> {id: 'mongo_id', name: '...', items: [...]}
+                const savedLists = apiResponse.map(doc => ({
+                    id: doc.id,
+                    name: doc.data.name,
+                    items: doc.data.items || []
+                }));
                 
                 if (savedLists.length > 0) {
                     savedSection.classList.remove('hidden');
                     savedLists.forEach(list => savedContainer.appendChild(app.createListCard(list, true)));
+                } else {
+                    savedSection.classList.add('hidden');
                 }
 
                 main.innerHTML = ''; main.appendChild(tpl);
@@ -367,7 +617,12 @@
             createListCard: (list, isSaved) => {
                 const div = document.createElement('div');
                 div.className = "bg-dark-800 p-4 rounded-xl border border-gray-800 active:scale-[0.98] transition cursor-pointer flex justify-between items-center group relative overflow-hidden";
-                div.onclick = (e) => { if(!e.target.closest('.delete-btn')) app.loadListForEditing(list); };
+                div.onclick = (e) => { 
+                    if(!e.target.closest('.delete-btn')) {
+                        // Zorg ervoor dat de ID van de opgeslagen API-lijst behouden blijft
+                        app.loadListForEditing(isSaved ? list : { ...list, id: null });
+                    }
+                };
                 div.innerHTML = `
                     <div class="flex items-center gap-4 z-10">
                         <div class="w-10 h-10 rounded-full bg-dark-900/50 flex items-center justify-center text-emerald-500 font-bold text-lg">${list.name.charAt(0).toUpperCase()}</div>
@@ -379,11 +634,22 @@
                 delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
                 delBtn.onclick = async (e) => {
                     e.stopPropagation();
-                    app.undoState = { type: 'list', data: list, isPredefined: !isSaved };
-                    if (isSaved) await DataService.deleteList(list.id);
-                    else DataService.deletePredefined(list.id);
-                    app.renderDashboard();
-                    app.showToast(`'${list.name}' verwijderd`, app.handleUndo);
+                    // Maak een kopie van de list object voor de undo state
+                    app.undoState = { type: 'list', data: JSON.parse(JSON.stringify(list)), isPredefined: !isSaved };
+                    
+                    if (isSaved) {
+                        const success = await DataService.deleteList(list.id);
+                        if(success) {
+                            app.renderDashboard();
+                            app.showToast(`'${list.name}' verwijderd`, 'success', app.handleUndo);
+                        } else {
+                            app.undoState = null; // Verwijderen mislukt, geen undo mogelijk
+                        }
+                    } else {
+                        DataService.deletePredefined(list.id);
+                        app.renderDashboard();
+                        app.showToast(`'${list.name}' verborgen`, 'success', app.handleUndo);
+                    }
                 };
                 div.appendChild(delBtn);
                 return div;
@@ -392,8 +658,8 @@
             // --- VIEW: Editor ---
             startEmpty: () => { app.loadListForEditing({ id: null, name: "", items: [] }); },
             loadListForEditing: (list) => {
+                // Diepe kopie om de originele lijst niet aan te tasten
                 app.currentList = JSON.parse(JSON.stringify(list));
-                if (list.id && list.id.startsWith('p')) app.currentList.id = null;
                 app.renderEditor();
             },
             renderEditor: (focusNew = true) => {
@@ -403,10 +669,11 @@
                 nameInput.value = app.currentList.name;
                 nameInput.oninput = (e) => app.currentList.name = e.target.value;
                 const ul = tpl.getElementById('editor-items');
-                app.currentList.items.forEach((item, index) => ul.appendChild(app.createEditorItem(item, index)));
+                // Zorg ervoor dat items een array is, zelfs als het leeg is.
+                (app.currentList.items || []).forEach((item, index) => ul.appendChild(app.createEditorItem(item, index)));
                 
                 document.getElementById('header-title').innerText = "Bewerken";
-                document.getElementById('header-actions').innerHTML = `<button onclick="app.shareList()" class="text-emerald-500 hover:text-white transition"><i class="fa-solid fa-share-nodes"></i></button>`;
+                document.getElementById('header-actions').innerHTML = `<button onclick="app.shareList()" class="text-emerald-500 hover:text-white transition" title="Delen"><i class="fa-solid fa-share-nodes"></i></button>`;
                 
                 main.innerHTML = ''; main.appendChild(tpl);
                 new Sortable(document.getElementById('editor-items'), {
@@ -431,50 +698,89 @@
             addItem: (name = null) => {
                 const input = document.getElementById('new-item-input');
                 const val = name || (input ? input.value.trim() : '');
-                if (val) { app.currentList.items.push({ name: val }); app.renderEditor(); }
+                if (val) { 
+                    if (!app.currentList.items) app.currentList.items = []; // Zorg voor initiële array
+                    app.currentList.items.push({ name: val }); 
+                    // Update UI zonder full render als input leeg is (sneller)
+                    if (input && !name) input.value = '';
+                    app.renderEditor(false);
+                }
             },
             removeItem: (index) => {
                 const item = app.currentList.items[index];
                 app.undoState = { type: 'item', data: item, index: index };
                 app.currentList.items.splice(index, 1);
                 app.renderEditor(false);
-                app.showToast("Item verwijderd", app.handleUndo);
+                app.showToast("Item verwijderd", 'success', app.handleUndo);
             },
             
             // --- Actions ---
             startVoiceInput: () => {
-                if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { alert("Geen spraakondersteuning"); return; }
+                if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { 
+                    app.showToast("Je browser ondersteunt spraakinvoer niet.", 'danger'); 
+                    return; 
+                }
                 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
                 const rec = new SR(); rec.lang = 'nl-NL'; rec.interimResults = false;
                 const mic = document.getElementById('mic-icon'); mic.className = "fa-solid fa-microphone-lines text-red-500 animate-pulse";
                 rec.start();
-                rec.onresult = (e) => { document.getElementById('new-item-input').value = e.results[0][0].transcript; mic.className = "fa-solid fa-microphone"; document.getElementById('new-item-input').focus(); };
+                rec.onresult = (e) => { 
+                    document.getElementById('new-item-input').value = e.results[0][0].transcript; 
+                    mic.className = "fa-solid fa-microphone"; 
+                    document.getElementById('new-item-input').focus(); 
+                };
                 rec.onend = () => mic.className = "fa-solid fa-microphone";
+                rec.onerror = (e) => {
+                    mic.className = "fa-solid fa-microphone";
+                    if (e.error !== 'no-speech' && e.error !== 'not-allowed') {
+                        app.showToast(`Spraakfout: ${e.error}`, 'danger');
+                    }
+                }
             },
             shareList: () => {
-                const text = app.currentList.items.map(i => `- ${i.name}`).join('\n');
+                const text = (app.currentList.items || []).map(i => `- ${i.name}`).join('\n');
                 const full = `Boodschappenlijst: ${app.currentList.name}\n\n${text}`;
                 if (navigator.share) navigator.share({ title: app.currentList.name, text: full }).catch(console.error);
-                else { navigator.clipboard.writeText(full); app.showToast("Gekopieerd!"); }
+                else { 
+                    // Fallback voor kopiëren naar klembord
+                    const tempInput = document.createElement('textarea');
+                    tempInput.value = full;
+                    document.body.appendChild(tempInput);
+                    tempInput.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(tempInput);
+                    app.showToast("Lijst gekopieerd naar klembord"); 
+                }
             },
-            saveAndShop: async () => {
-                if (!app.currentList.name) return app.showToast("Geef de lijst een naam!");
-                if (app.currentList.items.length === 0) return app.showToast("Lijst is leeg!");
-                if (!app.currentList.id) app.currentList.id = 'u-' + Date.now();
-                await DataService.saveList(app.currentList);
-                app.startShoppingMode();
+            
+            saveListAction: async (andShop = false) => {
+                const list = app.currentList;
+                if (!list.name) return app.showToast("Geef de lijst een naam!", 'danger');
+                if (list.items.length === 0) return app.showToast("Lijst is leeg!", 'danger');
+                
+                const result = await DataService.saveList(list);
+
+                if (result && result.id) {
+                    list.id = result.id; // Zorg ervoor dat de ID wordt bijgewerkt voor een nieuwe lijst
+                    if (andShop) {
+                        app.startShoppingMode();
+                    } else {
+                        app.showToast("Lijst opgeslagen");
+                        app.renderDashboard();
+                    }
+                } else if (result === null) {
+                    // PUT succesvol (geen content retour) of POST mislukt
+                    if (!andShop) app.renderDashboard();
+                }
+                // Foutmelding wordt afgehandeld in DataService
             },
-            saveOnly: async () => {
-                if (!app.currentList.name) return app.showToast("Geef de lijst een naam!");
-                if (!app.currentList.id) app.currentList.id = 'u-' + Date.now();
-                await DataService.saveList(app.currentList);
-                app.showToast("Lijst opgeslagen");
-                app.renderDashboard();
-            },
+            
+            saveAndShop: () => app.saveListAction(true),
+            saveOnly: () => app.saveListAction(false),
 
             // --- VIEW: Shopping ---
             startShoppingMode: () => {
-                app.shoppingList = app.currentList.items.map(item => ({ ...item, done: false }));
+                app.shoppingList = (app.currentList.items || []).map(item => ({ ...item, done: false }));
                 app.renderShopping();
             },
             renderShopping: () => {
@@ -517,7 +823,7 @@
                 const main = document.getElementById('main-content');
                 const tpl = document.getElementById('tpl-stats').content.cloneNode(true);
                 document.getElementById('header-title').innerText = "Statistieken";
-                document.getElementById('header-actions').innerHTML = '';
+                // Acties worden in init gezet
                 main.innerHTML = ''; main.appendChild(tpl);
                 app.updateCalendar();
             },
@@ -562,10 +868,13 @@
 
             // NEW: Clear stats UI Logic
             clearStats: async () => {
-                if (confirm("Weet je zeker dat je alle geschiedenis en statistieken wilt wissen? Dit kan niet ongedaan worden gemaakt.")) {
-                    await DataService.clearHistory();
-                    app.showToast("Statistieken gewist");
-                    app.renderStats(); 
+                 // Vervang confirm() door een custom modal/toast in een echte app.
+                if (window.confirm("Weet je zeker dat je alle geschiedenis en statistieken wilt wissen? Dit kan niet ongedaan worden gemaakt.")) {
+                    const success = await DataService.clearHistory();
+                    if (success) {
+                        app.showToast("Statistieken gewist");
+                        app.renderStats(); 
+                    }
                 }
             }
         };
