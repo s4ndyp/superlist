@@ -34,6 +34,7 @@
         .safe-header { padding-top: calc(1rem + env(safe-area-inset-top, 0px)); padding-bottom: 1rem; }
         #loading-overlay { background: #0f172a; position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; transition: opacity 0.5s; }
         .sortable-ghost { opacity: 0.4; background: #334155; }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.5rem; }
     </style>
 </head>
 <body class="bg-dark-900 text-slate-100 min-h-screen flex flex-col items-center overflow-hidden">
@@ -41,7 +42,7 @@
     <div id="loading-overlay">
         <div class="flex flex-col items-center">
             <i class="fa-solid fa-circle-notch fa-spin text-4xl text-emerald-500 mb-4"></i>
-            <p class="text-gray-400 animate-pulse text-sm">Data synchroniseren...</p>
+            <p class="text-gray-400 animate-pulse text-sm">Lijsten laden...</p>
         </div>
     </div>
 
@@ -155,9 +156,10 @@
     <script type="module">
         import OfflineManager from './offline_manager.js';
 
-        const APP_NAME = 'supermarkey';
-        const CLIENT_ID = 'sandman';
-        const API_URL = 'http://10.10.2.20:5000';
+        // CONFIGURATIE
+        const APP_NAME = 'superlijst';
+        const CLIENT_ID = 'jouw-unieke-id'; // Tip: kan ook uit localStorage komen
+        const API_URL = 'http://localhost:5000';
 
         const manager = new OfflineManager(API_URL, CLIENT_ID, APP_NAME);
 
@@ -169,47 +171,27 @@
         const DataService = {
             getLists: async () => {
                 const lists = await manager.getSmartCollection('lists');
-                // Belangrijk: we gebruiken hier unieke mapping om duplicaten te voorkomen
-                const uniqueMap = new Map();
-                (lists || []).forEach(l => {
-                    const id = l._id || l.id;
-                    if (id) uniqueMap.set(id, l);
-                });
-                return Array.from(uniqueMap.values()).map(l => ({ id: l._id || l.id, data: l }));
+                return lists.map(l => ({ id: l._id || l.id, data: l }));
             },
             saveList: async (listObj) => {
-                // DEXIE FIX: Het 'id' veld van Dexie mag NOOIT handmatig overschreven worden.
-                // We sturen alleen de payload en het _id voor de database mee.
-                const payload = {
-                    name: listObj.name,
-                    items: listObj.items
-                };
-                
-                // Als er al een _id is, voegen we die toe aan de payload voor een UPDATE
-                if (listObj._id) {
-                    payload._id = listObj._id;
-                }
-                
-                const result = await manager.saveSmartDocument('lists', payload);
-                return result;
+                // De manager V3 handelt _id en duplicaten nu zelf af!
+                return await manager.saveSmartDocument('lists', listObj);
             },
             deleteList: async (id) => {
+                // Gebruik gateway direct voor delete
                 await manager.gateway.deleteDocument('lists', id);
                 await manager.refreshCache('lists');
             },
             getHistory: async () => {
                 const history = await manager.getSmartCollection('history');
-                return (history || []).map(h => h.data || h);
+                return history;
             },
             addHistory: async (entry) => {
                 await manager.saveSmartDocument('history', entry);
             },
             clearHistory: async () => {
-                const history = await manager.getSmartCollection('history');
-                for (const item of history) {
-                    await manager.gateway.deleteDocument('history', item._id || item.id);
-                }
-                await manager.refreshCache('history');
+                // Gebruik de Smart Clear van de manager V3
+                await manager.clearSmartCollection('history');
             }
         };
 
@@ -224,30 +206,25 @@
             statDate: new Date(),
 
             init: async () => {
-                // 1. Initialiseer Dashboard
                 await app.renderDashboard();
                 
-                // 2. Verberg loading overlay
                 const overlay = document.getElementById('loading-overlay');
                 if(overlay) {
                     overlay.style.opacity = '0';
                     setTimeout(() => overlay.remove(), 500);
                 }
 
-                // 3. Sync en refresh
                 if (navigator.onLine) {
                     manager.syncOutbox().then(() => app.renderDashboard());
                 }
 
                 window.addEventListener('online', () => {
-                    app.showToast("Verbinding hersteld...");
+                    app.showToast("Verbinding hersteld, sync gestart...");
                     manager.syncOutbox().then(() => app.renderDashboard());
                 });
 
                 if ('serviceWorker' in navigator) {
-                    window.addEventListener('load', () => {
-                        navigator.serviceWorker.register('./sw.js').catch(e => console.error(e));
-                    });
+                    navigator.serviceWorker.register('./sw.js').catch(e => console.error(e));
                 }
             },
 
@@ -275,8 +252,6 @@
                 const savedContainer = tpl.getElementById('saved-list-container');
                 const emptyState = tpl.getElementById('empty-state');
                 
-                savedContainer.innerHTML = ''; 
-
                 document.getElementById('header-title').innerText = "SuperLijst";
                 document.getElementById('header-actions').innerHTML = `<button onclick="app.renderStats()" class="text-gray-400 hover:text-white transition"><i class="fa-solid fa-calendar-days text-xl"></i></button>`;
                 
@@ -285,10 +260,9 @@
                     if (lists.length === 0) {
                         emptyState.classList.remove('hidden');
                     } else {
-                        lists.sort((a, b) => a.data.name.localeCompare(b.data.name));
-                        lists.forEach(item => {
-                            savedContainer.appendChild(app.createListCard(item, true));
-                        });
+                        // Sorteren op naam
+                        lists.sort((a, b) => (a.data.name || "").localeCompare(b.data.name || ""));
+                        lists.forEach(item => savedContainer.appendChild(app.createListCard(item)));
                     }
                 } catch (e) {
                     console.error(e);
@@ -297,10 +271,10 @@
                 main.appendChild(tpl);
             },
 
-            createListCard: (item, isSaved) => {
+            createListCard: (item) => {
                 const div = document.createElement('div');
                 div.className = "bg-dark-800 p-4 rounded-xl border border-gray-700 hover:border-emerald-500/50 transition flex justify-between items-center group cursor-pointer";
-                div.onclick = () => app.startEdit(item.data, isSaved ? item.id : null);
+                div.onclick = () => app.startEdit(item.data);
                 
                 div.innerHTML = `
                     <div class="flex items-center gap-3">
@@ -324,22 +298,17 @@
                     }
                 };
                 div.appendChild(delBtn);
-                
                 return div;
             },
 
-            startEdit: (data, id = null) => {
-                // Zorg voor een schone kopie van de data
-                app.currentList = { 
-                    name: data.name || '',
-                    items: Array.isArray(data.items) ? [...data.items] : [],
-                    _id: id || data._id || null
-                };
+            startEdit: (data) => {
+                // Schone kopie maken voor bewerken
+                app.currentList = JSON.parse(JSON.stringify(data));
                 app.renderEditor();
             },
 
             startEmpty: () => {
-                app.currentList = { name: '', items: [], _id: null };
+                app.currentList = { name: '', items: [] };
                 app.renderEditor();
             },
 
@@ -349,7 +318,7 @@
                 
                 const tpl = document.getElementById('tpl-editor').content.cloneNode(true);
                 const nameInput = tpl.getElementById('list-name-input');
-                nameInput.value = app.currentList.name;
+                nameInput.value = app.currentList.name || '';
                 nameInput.oninput = (e) => app.currentList.name = e.target.value;
                 
                 const ul = tpl.getElementById('editor-items');
@@ -395,13 +364,10 @@
             saveOnly: async () => {
                 if (!app.currentList.name) app.currentList.name = "Naamloze lijst";
                 try {
-                    const saved = await DataService.saveList(app.currentList);
-                    // Update het ID voor het geval het een nieuwe lijst was
-                    if (saved && saved._id) {
-                        app.currentList._id = saved._id;
-                    }
+                    await DataService.saveList(app.currentList);
                     app.showToast("Opgeslagen");
-                    setTimeout(() => app.renderDashboard(), 150);
+                    // Geef de manager even tijd om de _id koppeling te doen bij een sync
+                    setTimeout(() => app.renderDashboard(), 200);
                 } catch (e) {
                     app.showToast("Opslaan mislukt", "danger");
                 }
@@ -410,14 +376,11 @@
             saveAndShop: async () => {
                 if (!app.currentList.name) app.currentList.name = "Mijn lijst";
                 if (app.currentList.items.length === 0) {
-                    app.showToast("Lijst is leeg!", "danger");
+                    app.showToast("Voeg eerst producten toe!", "danger");
                     return;
                 }
                 try {
-                    const saved = await DataService.saveList(app.currentList);
-                    if (saved && saved._id) {
-                        app.currentList._id = saved._id;
-                    }
+                    await DataService.saveList(app.currentList);
                     app.shoppingList = app.currentList.items.map(i => ({ ...i, done: false }));
                     app.renderShopping();
                 } catch (e) {
@@ -466,7 +429,11 @@
             },
 
             finishShopping: async () => {
-                await DataService.addHistory({ date: new Date().toISOString(), listName: app.currentList.name });
+                await DataService.addHistory({ 
+                    date: new Date().toISOString(), 
+                    listName: app.currentList.name,
+                    itemCount: app.shoppingList.length
+                });
                 app.showToast("Winkelen voltooid!");
                 app.renderDashboard();
             },
@@ -477,7 +444,6 @@
                 main.innerHTML = '';
                 
                 const tpl = document.getElementById('tpl-stats').content.cloneNode(true);
-                
                 const year = app.statDate.getFullYear();
                 const month = app.statDate.getMonth();
                 tpl.getElementById('stats-month-year').innerText = new Intl.DateTimeFormat('nl-NL', { month: 'long', year: 'numeric' }).format(app.statDate);
@@ -496,7 +462,7 @@
                 for (let day = 1; day <= daysInMonth; day++) {
                     const count = monthHistory.filter(h => new Date(h.date).getDate() === day).length;
                     const div = document.createElement('div');
-                    div.className = `aspect-square rounded-lg flex flex-col items-center justify-center text-sm border ${count > 0 ? 'bg-emerald-500/20 border-emerald-500 text-white' : 'bg-dark-900 border-gray-800 text-gray-500'}`;
+                    div.className = `aspect-square rounded-lg flex flex-col items-center justify-center text-sm border ${count > 0 ? 'bg-emerald-500/20 border-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-dark-900 border-gray-800 text-gray-500'}`;
                     div.innerHTML = `<span>${day}</span>${count > 0 ? `<span class="text-[9px] text-emerald-400 font-bold">+${count}</span>` : ''}`;
                     daysContainer.appendChild(div);
                 }
