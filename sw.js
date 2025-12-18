@@ -1,11 +1,11 @@
 /**
- * SuperLijst Service Worker - Versie 11 (Geoptimaliseerd voor Dexie & OfflineManager)
- * Alleen bedoeld voor het cachen van de App Shell (assets).
+ * SuperLijst Service Worker - Versie 12 (Agressieve Caching)
+ * Geoptimaliseerd voor snelle activatie en betrouwbare offline toegang.
  */
 
-const CACHE_NAME = 'superlijst-assets-v11';
+const CACHE_NAME = 'superlijst-assets-v12';
 
-// Bestanden die we offline beschikbaar willen hebben
+// De bestanden die nodig zijn voor de "App Shell"
 const urlsToCache = [
     './',
     './index.html',
@@ -20,52 +20,86 @@ const urlsToCache = [
     'https://unpkg.com/dexie/dist/dexie.js'
 ];
 
-// Installatie: Sla alle bestanden op in de cache
+// --- INSTALLATIE ---
 self.addEventListener('install', event => {
+    console.log('[SW] Installeren van nieuwe versie...');
     event.waitUntil(
         caches.open(CACHE_NAME).then(cache => {
-            console.log('[SW] Bestanden cachen');
             return cache.addAll(urlsToCache);
         })
     );
+    // Dwing de nieuwe SW om direct de 'active' status aan te nemen
     self.skipWaiting();
 });
 
-// Activatie: Verwijder oude caches
+// --- ACTIVATIE ---
 self.addEventListener('activate', event => {
+    console.log('[SW] Activeren en oude caches opruimen...');
     event.waitUntil(
-        caches.keys().then(cacheNames => {
-            return Promise.all(
-                cacheNames.map(cacheName => {
-                    if (cacheName !== CACHE_NAME) {
-                        console.log('[SW] Oude cache verwijderen:', cacheName);
-                        return caches.delete(cacheName);
-                    }
-                })
-            );
-        })
+        Promise.all([
+            // Verwijder oude caches die niet overeenkomen met CACHE_NAME
+            caches.keys().then(cacheNames => {
+                return Promise.all(
+                    cacheNames.map(cacheName => {
+                        if (cacheName !== CACHE_NAME) {
+                            return caches.delete(cacheName);
+                        }
+                    })
+                );
+            }),
+            // Neem direct de controle over alle openstaande tabbladen/vensters
+            self.clients.claim()
+        ])
     );
-    self.clients.claim();
 });
 
-// Fetch: Network-first, fallback naar cache (zo heb je altijd de nieuwste versie als je online bent)
+// --- FETCH STRATEGIE ---
 self.addEventListener('fetch', event => {
-    // Alleen GET requests cachen (geen API calls)
+    // Alleen GET requests afhandelen (geen API calls voor de gateway)
+    // We laten de OfflineManager/DataGateway zelf hun POST/PUT requests doen.
     if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
         return;
     }
 
     event.respondWith(
-        fetch(event.request)
+        // Probeer het netwerk, maar gebruik een timeout van 2 seconden
+        fetchWithTimeout(event.request, 2000)
             .then(response => {
-                // Als het netwerk werkt, kopieer de response naar de cache
+                // Succes op netwerk? Sla op in cache en geef terug
                 const resClone = response.clone();
                 caches.open(CACHE_NAME).then(cache => cache.put(event.request, resClone));
                 return response;
             })
             .catch(() => {
-                // Als het netwerk faalt, gebruik de cache
-                return caches.match(event.request);
+                // Netwerk faalt of duurt te lang? Gebruik de cache
+                return caches.match(event.request).then(cachedResponse => {
+                    if (cachedResponse) return cachedResponse;
+                    
+                    // Indien echt niets gevonden (ook niet in cache), stuur lege response of offline pagina
+                    return new Response("Offline content niet beschikbaar", { 
+                        status: 503, 
+                        statusText: "Service Unavailable" 
+                    });
+                });
             })
     );
 });
+
+/**
+ * Hulpfunctie om een fetch te laten falen na een bepaalde tijd (timeout)
+ */
+function fetchWithTimeout(request, timeout = 2000) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Timeout')), timeout);
+        fetch(request).then(
+            response => {
+                clearTimeout(timer);
+                resolve(response);
+            },
+            err => {
+                clearTimeout(timer);
+                reject(err);
+            }
+        );
+    });
+}
