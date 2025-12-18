@@ -54,7 +54,7 @@
         </header>
 
         <main id="main-content" class="flex-grow p-4 overflow-y-auto"></main>
-        <div id="notification-container" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-11/12 max-w-sm z-50 flex flex-col gap-2 pointer-events-none"></div>
+        <div id="notification-container" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-11/12 max-sm z-50 flex flex-col gap-2 pointer-events-none"></div>
         <div id="fixed-action-bar" class="fixed inset-x-0 bottom-0 z-30"></div> 
     </div>
 
@@ -158,11 +158,11 @@
         import OfflineManager from './offline_manager.js';
 
         // CONFIGURATIE
-        const APP_NAME = 'superlijst';
+        const APP_NAME = 'supermarkey';
         const CLIENT_ID = 'sandman';
         const API_URL = 'http://10.10.2.20:5000';
 
-        // INITIALISATIE MET DRIE ARGUMENTEN
+        // INITIALISATIE
         const manager = new OfflineManager(API_URL, CLIENT_ID, APP_NAME);
 
         /**
@@ -176,9 +176,11 @@
                 return (lists || []).map(l => ({ id: l._id || l.id, data: l }));
             },
             saveList: async (listObj) => {
-                // Dexie fix: id veld verwijderen voor opslag
+                // Dexie fix: id veld verwijderen, maar _id behouden voor updates
                 const { id, ...cleanData } = listObj;
-                return await manager.saveSmartDocument('lists', cleanData);
+                const result = await manager.saveSmartDocument('lists', cleanData);
+                // Return de data zodat we het _id direct terugkrijgen
+                return result;
             },
             deleteList: async (id) => {
                 await manager.gateway.deleteDocument('lists', id);
@@ -213,6 +215,19 @@
             init: () => {
                 app.renderDashboard();
                 manager.syncOutbox();
+                
+                // Luister naar verbindingsherstel
+                window.addEventListener('online', () => {
+                    app.showToast("Verbinding hersteld, synchroniseren...");
+                    manager.syncOutbox().then(() => app.renderDashboard());
+                });
+
+                // Service Worker Registratie
+                if ('serviceWorker' in navigator) {
+                    window.addEventListener('load', () => {
+                        navigator.serviceWorker.register('./sw.js').catch(e => console.error(e));
+                    });
+                }
             },
 
             showToast: (msg, type = 'success') => {
@@ -289,14 +304,15 @@
             startEdit: (data, id = null) => {
                 app.currentList = { 
                     ...data, 
-                    id: id || data._id || data.id,
+                    _id: id || data._id, 
+                    id: id || data._id,
                     items: Array.isArray(data.items) ? [...data.items] : []
                 };
                 app.renderEditor();
             },
 
             startEmpty: () => {
-                app.currentList = { name: '', items: [], id: null };
+                app.currentList = { name: '', items: [], id: null, _id: null };
                 app.renderEditor();
             },
 
@@ -351,7 +367,12 @@
             saveOnly: async () => {
                 if (!app.currentList.name) app.currentList.name = "Naamloze lijst";
                 try {
-                    await DataService.saveList(app.currentList);
+                    const saved = await DataService.saveList(app.currentList);
+                    // Update ID's om duplicaten te voorkomen bij herhaaldelijk klikken
+                    if (saved && saved._id) {
+                        app.currentList._id = saved._id;
+                        app.currentList.id = saved._id;
+                    }
                     app.showToast("Lijst opgeslagen");
                     app.renderDashboard();
                 } catch (e) {
@@ -366,7 +387,11 @@
                     return;
                 }
                 try {
-                    await DataService.saveList(app.currentList);
+                    const saved = await DataService.saveList(app.currentList);
+                    if (saved && saved._id) {
+                        app.currentList._id = saved._id;
+                        app.currentList.id = saved._id;
+                    }
                     app.shoppingList = app.currentList.items.map(i => ({ ...i, done: false }));
                     app.renderShopping();
                 } catch (e) {
@@ -469,16 +494,5 @@
 
         window.addEventListener('DOMContentLoaded', app.init);
     </script>
-
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('./sw.js')
-            .then(reg => console.log('Service Worker geregistreerd!', reg))
-            .catch(err => console.log('Service Worker registratie mislukt:', err));
-        });
-      }
-    </script>
-  
 </body>
 </html>
