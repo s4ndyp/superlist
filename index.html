@@ -267,30 +267,40 @@
             },
 
             // VIEWS
-            renderDashboard: async () => {
-                app.clearFixedActions();
-                const main = document.getElementById('main-content');
-                const tpl = document.getElementById('tpl-dashboard').content.cloneNode(true);
-                const savedContainer = tpl.getElementById('saved-list-container');
-                const emptyState = tpl.getElementById('empty-state');
-                
-                document.getElementById('header-title').innerText = "SuperLijst";
-                document.getElementById('header-actions').innerHTML = `<button onclick="app.renderStats()" class="text-gray-400 hover:text-white transition"><i class="fa-solid fa-calendar-days text-xl"></i></button>`;
-                
-                try {
-                    const lists = await DataService.getLists();
-                    if (lists.length === 0) {
-                        emptyState.classList.remove('hidden');
-                    } else {
-                        lists.forEach(item => savedContainer.appendChild(app.createListCard(item, true)));
-                    }
-                } catch (e) {
-                    console.error("Dashboard error:", e);
-                }
+renderDashboard: async () => {
+    app.clearFixedActions();
+    const main = document.getElementById('main-content');
+    
+    // 1. Maak het hoofdscherm leeg en plaats het template
+    main.innerHTML = ''; 
+    const tpl = document.getElementById('tpl-dashboard').content.cloneNode(true);
+    const savedContainer = tpl.getElementById('saved-list-container');
+    const emptyState = tpl.getElementById('empty-state');
+    
+    // 2. Zorg dat de container echt leeg is
+    savedContainer.innerHTML = ''; 
 
-                main.innerHTML = '';
-                main.appendChild(tpl);
-            },
+    document.getElementById('header-title').innerText = "SuperLijst";
+    document.getElementById('header-actions').innerHTML = `<button onclick="app.renderStats()" class="text-gray-400 hover:text-white transition"><i class="fa-solid fa-calendar-days text-xl"></i></button>`;
+    
+    try {
+        const lists = await DataService.getLists();
+        if (lists.length === 0) {
+            emptyState.classList.remove('hidden');
+        } else {
+            // Sorteer eventueel op naam zodat ze niet verspringen
+            lists.sort((a, b) => a.data.name.localeCompare(b.data.name));
+            
+            lists.forEach(item => {
+                savedContainer.appendChild(app.createListCard(item, true));
+            });
+        }
+    } catch (e) {
+        console.error("Dashboard error:", e);
+    }
+
+    main.appendChild(tpl);
+},
 
             createListCard: (item, isSaved) => {
                 const div = document.createElement('div');
