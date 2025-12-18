@@ -1,9 +1,9 @@
 /**
- * SuperLijst Service Worker - Versie 12 (Agressieve Caching)
+ * SuperLijst Service Worker - Versie 13 (Agressieve Caching)
  * Geoptimaliseerd voor snelle activatie en betrouwbare offline toegang.
  */
 
-const CACHE_NAME = 'superlijst-assets-v12';
+const CACHE_NAME = 'superlijst-assets-v13';
 
 // De bestanden die nodig zijn voor de "App Shell"
 const urlsToCache = [
