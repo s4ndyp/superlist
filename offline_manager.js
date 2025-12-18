@@ -1,7 +1,6 @@
 /**
- * OfflineManager
- * Beheert de lokale Dexie database en synchroniseert met de DataGateway.
- * Ondersteunt automatische prefixing per app en binaire bijlagen.
+ * OfflineManager V3 - Samengevoegde Versie
+ * Beheert lokale Dexie database, binaire bijlagen, Smart Clear en ID-koppeling.
  */
 import DataGateway from './datagateway.js';
 
@@ -9,19 +8,17 @@ export default class OfflineManager {
   /**
    * @param {string} baseUrl - De URL van de API Gateway.
    * @param {string} clientId - De unieke ID van de gebruiker.
-   * @param {string} appName - De naam van de applicatie (voor isolatie en prefixing).
+   * @param {string} appName - De naam van de applicatie.
    */
   constructor(baseUrl, clientId, appName) {
     this.appName = appName;
     this.gateway = new DataGateway(baseUrl, clientId, appName);
     
-    // We maken een unieke database naam per app en per gebruiker
+    // Unieke database per app en gebruiker
     this.db = new Dexie(`AppCache_${appName}_${clientId}`);
     
-    // Schema definitie
-    // data: de lokale kopie van de MongoDB documenten
-    // outbox: acties die nog naar de server gestuurd moeten worden
-    this.db.version(1).stores({
+    // Schema definitie - Versie 4 voor de nieuwe ID koppeling logica
+    this.db.version(4).stores({
       data: "++id, collection, _id", 
       outbox: "++id, action, collection, payload"
     });
@@ -29,7 +26,6 @@ export default class OfflineManager {
 
   /**
    * Hulpmethode om binaire bestanden (Blob/File) om te zetten naar Base64.
-   * Nodig voor verzending via de JSON API.
    * @private
    */
   _blobToBase64(blob) {
@@ -42,132 +38,78 @@ export default class OfflineManager {
   }
 
   /**
-   * Haalt alle documenten van een collectie op.
-   * Geeft direct de lokale cache terug voor snelheid en ververst op de achtergrond.
-   */
-  async getSmartCollection(collectionName) {
-    // 1. Haal direct op uit de lokale Dexie database
-    const localData = await this.db.data
-      .where({ collection: collectionName })
-      .toArray();
-    
-    // 2. Indien online, ververs de cache op de achtergrond
-    if (navigator.onLine) {
-      this.refreshCache(collectionName);
-    }
-    
-    return localData;
-  }
-
-  /**
-   * Haalt één specifiek document op via ID.
-   * Zoekt eerst lokaal; bij afwezigheid wordt de server geraadpleegd (indien online).
-   */
-  async getSmartDocument(collectionName, docId) {
-    let doc = await this.db.data
-      .where({ collection: collectionName, _id: docId })
-      .first();
-
-    if (!doc && navigator.onLine) {
-      try {
-        doc = await this.gateway.getDocument(collectionName, docId);
-        // Sla direct op in cache voor toekomstig offline gebruik
-        await this.db.data.put({ ...doc, collection: collectionName });
-      } catch (err) {
-        console.error("Document niet gevonden op server:", err);
-      }
-    }
-    return doc;
-  }
-
-  /**
-   * Slaat een document op (nieuw of wijziging).
-   * Werkt volgens het 'Optimistic UI' principe: direct lokaal succesvol, sync op de achtergrond.
+   * Slaat een document intelligent op.
+   * Handelt binaire data af en voorkomt ID-conflicten.
    */
   async saveSmartDocument(collectionName, data) {
-    // 1. Sla direct lokaal op in de cache (inclusief eventuele binaire Blobs)
-    await this.db.data.put({ ...data, collection: collectionName });
+    const serverId = data._id || null;
+    const action = serverId ? 'PUT' : 'POST';
 
-    // 2. Voeg de actie toe aan de outbox (wachtrij)
+    // 1. Optimistic UI: Sla direct lokaal op
+    if (serverId) {
+      const existing = await this.db.data
+        .where({ collection: collectionName, _id: serverId })
+        .first();
+      
+      if (existing) {
+        await this.db.data.update(existing.id, { ...data, collection: collectionName });
+      } else {
+        await this.db.data.add({ ...data, collection: collectionName, _id: serverId });
+      }
+    } else {
+      // Nieuw lokaal item zonder server _id
+      await this.db.data.add({ ...data, collection: collectionName });
+    }
+
+    // 2. Voeg toe aan outbox voor sync
     await this.db.outbox.add({
-      action: 'SAVE',
+      action: action,
       collection: collectionName,
       payload: data,
       timestamp: Date.now()
     });
 
-    // 3. Probeer direct te synchroniseren
-    this.syncOutbox();
-    
-    return { status: 'saved_locally', data };
+    if (navigator.onLine) {
+      this.syncOutbox();
+    }
+
+    return data;
   }
 
   /**
-   * Verwijdert een document.
-   */
-  async deleteSmartDocument(collectionName, docId) {
-    // 1. Verwijder lokaal
-    await this.db.data.where({ collection: collectionName, _id: docId }).delete();
-
-    // 2. Voeg toe aan outbox
-    await this.db.outbox.add({
-      action: 'DELETE',
-      collection: collectionName,
-      payload: { _id: docId },
-      timestamp: Date.now()
-    });
-
-    this.syncOutbox();
-  }
-
-  /**
-   * Wist de gehele collectie lokaal en zet een opdracht in de wachtrij voor de server.
-   * @param {string} collectionName - De naam van de collectie (zonder prefix).
-   */
-  async clearSmartCollection(collectionName) {
-    // 1. Directe visuele feedback: Wis alle lokale data voor deze collectie in Dexie
-    await this.db.data.where({ collection: collectionName }).delete();
-
-    // 2. Voeg de CLEAR actie toe aan de outbox voor synchronisatie met de MongoDB server
-    await this.db.outbox.add({
-      action: 'CLEAR',
-      collection: collectionName,
-      payload: null,
-      timestamp: Date.now()
-    });
-
-    // 3. Probeer de wijziging direct naar de server te sturen
-    this.syncOutbox();
-  }
-
-  /**
-   * Verwerkt de wachtrij van wijzigingen en stuurt deze naar de API Gateway.
+   * Synchroniseert de outbox met de server.
+   * Inclusief Base64 conversie en ID-koppeling.
    */
   async syncOutbox() {
     if (!navigator.onLine) return;
 
-    const pending = await this.db.outbox.toArray();
-    if (pending.length === 0) return;
-
-    for (const item of pending) {
+    const items = await this.db.outbox.orderBy('id').toArray();
+    
+    for (const item of items) {
       try {
-        if (item.action === 'SAVE') {
-          let finalPayload = { ...item.payload };
+        let finalPayload = JSON.parse(JSON.stringify(item.payload));
 
-          // Scan op binaire velden en converteer naar Base64 voor de JSON API
-          for (const key in finalPayload) {
-            if (finalPayload[key] instanceof Blob || finalPayload[key] instanceof File) {
-              finalPayload[key] = await this._blobToBase64(finalPayload[key]);
-            }
+        // Converteer eventuele Files/Blobs naar Base64
+        for (const key in finalPayload) {
+          if (finalPayload[key] instanceof File || finalPayload[key] instanceof Blob) {
+            finalPayload[key] = await this._blobToBase64(finalPayload[key]);
           }
+        }
 
-          await this.gateway.saveDocument(item.collection, finalPayload);
+        if (item.action === 'POST') {
+          const response = await this.gateway.saveDocument(item.collection, finalPayload);
+          // Koppel het nieuwe server ID aan het lokale record om duplicaten te voorkomen
+          if (response && response._id) {
+            await this._linkServerId(item.collection, item.payload, response._id);
+          }
         } 
+        else if (item.action === 'PUT') {
+          await this.gateway.updateDocument(item.collection, item.payload._id, finalPayload);
+        }
         else if (item.action === 'DELETE') {
           await this.gateway.deleteDocument(item.collection, item.payload._id);
         }
         else if (item.action === 'CLEAR') {
-          // Roep de clearCollection methode aan van de DataGateway
           await this.gateway.clearCollection(item.collection);
         }
 
@@ -175,28 +117,86 @@ export default class OfflineManager {
         await this.db.outbox.delete(item.id);
       } catch (err) {
         console.error("Synchronisatiefout voor item:", item, err);
-        break; // Stop de loop bij netwerkfouten
+        break; // Stop bij netwerkfouten
       }
     }
   }
 
   /**
-   * Ververst de volledige lokale cache voor een collectie vanuit MongoDB.
+   * Interne methode om server _id's terug te schrijven naar lokale records.
+   * @private
+   */
+  async _linkServerId(collectionName, originalPayload, newServerId) {
+    // Zoek het lokale record dat nog geen _id heeft maar wel dezelfde unieke kenmerken (zoals naam)
+    const localRecord = await this.db.data
+      .where({ collection: collectionName })
+      .filter(doc => !doc._id && (doc.name === originalPayload.name))
+      .first();
+
+    if (localRecord) {
+      await this.db.data.update(localRecord.id, { _id: newServerId });
+    }
+  }
+
+  /**
+   * Haalt data op en filtert duplicaten (safety check).
+   */
+  async getSmartCollection(collectionName) {
+    let localData = await this.db.data.where({ collection: collectionName }).toArray();
+    
+    // Filter duplicaten uit de array voor de UI
+    const seen = new Set();
+    localData = localData.filter(item => {
+      const identifier = item._id || `local-${item.id}`;
+      if (seen.has(identifier)) return false;
+      seen.add(identifier);
+      return true;
+    });
+
+    if (navigator.onLine) {
+      this.refreshCache(collectionName);
+    }
+    return localData;
+  }
+
+  /**
+   * Ververst de volledige lokale cache vanuit MongoDB.
    */
   async refreshCache(collectionName) {
     try {
       const freshData = await this.gateway.getCollection(collectionName);
       
-      // Verwijder oude cache data voor deze specifieke collectie
-      await this.db.data.where({ collection: collectionName }).delete();
+      // Verwijder oude cache, behalve items die nog in de outbox staan (niet-gesyncte wijzigingen)
+      const outboxItems = await this.db.outbox.where({ collection: collectionName }).toArray();
+      const outboxIds = new Set(outboxItems.map(i => i.payload._id).filter(id => id));
+
+      await this.db.data.where({ collection: collectionName })
+        .filter(doc => !outboxIds.has(doc._id))
+        .delete();
       
-      // Voeg de nieuwe data toe met de collectie-tag
       const taggedData = freshData.map(d => ({ ...d, collection: collectionName }));
-      await this.db.data.bulkAdd(taggedData);
-      
-      console.log(`Cache ververst voor: ${this.appName}_${collectionName}`);
+      await this.db.data.bulkPut(taggedData);
     } catch (err) {
-      console.warn("Kon cache niet verversen:", err);
+      console.warn("Cache refresh mislukt:", err);
+    }
+  }
+
+  /**
+   * Voegt een CLEAR actie toe aan de outbox voor de hele collectie.
+   */
+  async clearSmartCollection(collectionName) {
+    // Lokaal direct legen
+    await this.db.data.where({ collection: collectionName }).delete();
+    
+    // Toevoegen aan outbox
+    await this.db.outbox.add({
+      action: 'CLEAR',
+      collection: collectionName,
+      timestamp: Date.now()
+    });
+
+    if (navigator.onLine) {
+      this.syncOutbox();
     }
   }
 }
