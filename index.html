@@ -23,11 +23,6 @@
                     colors: {
                         dark: { 900: '#0f172a', 800: '#1e293b', 700: '#334155' },
                         accent: { 500: '#10b981', 600: '#059669' }
-                    },
-                    animation: { 'fade-in': 'fadeIn 0.3s ease-out', 'slide-up': 'slideUp 0.3s ease-out' },
-                    keyframes: {
-                        fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
-                        slideUp: { '0%': { transform: 'translateY(20px)', opacity: '0' }, '100%': { transform: 'translateY(0)', opacity: '1' } }
                     }
                 }
             }
@@ -36,14 +31,9 @@
 
     <style>
         body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; padding-top: env(safe-area-inset-top); }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #0f172a; }
-        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-        .sortable-ghost { opacity: 0.4; background: #334155; }
-        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.5rem; }
         .safe-header { padding-top: calc(1rem + env(safe-area-inset-top, 0px)); padding-bottom: 1rem; }
-        main { padding-bottom: env(safe-area-inset-bottom, 1rem); }
         #loading-overlay { background: #0f172a; position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; transition: opacity 0.5s; }
+        .sortable-ghost { opacity: 0.4; background: #334155; }
     </style>
 </head>
 <body class="bg-dark-900 text-slate-100 min-h-screen flex flex-col items-center overflow-hidden">
@@ -51,7 +41,7 @@
     <div id="loading-overlay">
         <div class="flex flex-col items-center">
             <i class="fa-solid fa-circle-notch fa-spin text-4xl text-emerald-500 mb-4"></i>
-            <p class="text-gray-400 animate-pulse text-sm">Lijsten laden...</p>
+            <p class="text-gray-400 animate-pulse text-sm">Data synchroniseren...</p>
         </div>
     </div>
 
@@ -93,7 +83,7 @@
             <ul id="editor-items" class="space-y-2 mb-6 min-h-[10px]"></ul>
         </div>
     </template>
-    
+
     <template id="tpl-editor-actions">
         <div id="editor-actions-fixed-bar" class="bg-dark-800/95 backdrop-blur-md px-4 pt-4 border-t border-gray-700 w-full animate-slide-up shadow-[0_-4px_20px_rgba(0,0,0,0.3)]" style="padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));">
             <div class="w-full max-w-md mx-auto">
@@ -165,12 +155,10 @@
     <script type="module">
         import OfflineManager from './offline_manager.js';
 
-        // CONFIGURATIE
         const APP_NAME = 'supermarkey';
-        const CLIENT_ID = 'sandman'; // Tip: Dit kan ook een variabele zijn die je ergens opslaat
+        const CLIENT_ID = 'sandman';
         const API_URL = 'http://10.10.2.20:5000';
 
-        // INITIALISATIE
         const manager = new OfflineManager(API_URL, CLIENT_ID, APP_NAME);
 
         /**
@@ -181,13 +169,29 @@
         const DataService = {
             getLists: async () => {
                 const lists = await manager.getSmartCollection('lists');
-                return (lists || []).map(l => ({ id: l._id || l.id, data: l }));
+                // Belangrijk: we gebruiken hier unieke mapping om duplicaten te voorkomen
+                const uniqueMap = new Map();
+                (lists || []).forEach(l => {
+                    const id = l._id || l.id;
+                    if (id) uniqueMap.set(id, l);
+                });
+                return Array.from(uniqueMap.values()).map(l => ({ id: l._id || l.id, data: l }));
             },
             saveList: async (listObj) => {
-                // Dexie fix: id veld verwijderen voor opslag, maar _id behouden
-                const { id, ...cleanData } = listObj;
-                const result = await manager.saveSmartDocument('lists', cleanData);
-                return result; // Bevat het nieuwe _id
+                // DEXIE FIX: Het 'id' veld van Dexie mag NOOIT handmatig overschreven worden.
+                // We sturen alleen de payload en het _id voor de database mee.
+                const payload = {
+                    name: listObj.name,
+                    items: listObj.items
+                };
+                
+                // Als er al een _id is, voegen we die toe aan de payload voor een UPDATE
+                if (listObj._id) {
+                    payload._id = listObj._id;
+                }
+                
+                const result = await manager.saveSmartDocument('lists', payload);
+                return result;
             },
             deleteList: async (id) => {
                 await manager.gateway.deleteDocument('lists', id);
@@ -220,30 +224,26 @@
             statDate: new Date(),
 
             init: async () => {
-                // Toon dashboard (uit cache)
+                // 1. Initialiseer Dashboard
                 await app.renderDashboard();
                 
-                // Verberg loading overlay
-                setTimeout(() => {
-                    const overlay = document.getElementById('loading-overlay');
-                    if(overlay) {
-                        overlay.style.opacity = '0';
-                        setTimeout(() => overlay.remove(), 500);
-                    }
-                }, 400);
+                // 2. Verberg loading overlay
+                const overlay = document.getElementById('loading-overlay');
+                if(overlay) {
+                    overlay.style.opacity = '0';
+                    setTimeout(() => overlay.remove(), 500);
+                }
 
-                // Start sync als we online zijn
+                // 3. Sync en refresh
                 if (navigator.onLine) {
                     manager.syncOutbox().then(() => app.renderDashboard());
                 }
 
-                // Luister naar internet herstel
                 window.addEventListener('online', () => {
-                    app.showToast("Verbinding hersteld, synchroniseren...");
+                    app.showToast("Verbinding hersteld...");
                     manager.syncOutbox().then(() => app.renderDashboard());
                 });
 
-                // Registreer Service Worker voor offline assets
                 if ('serviceWorker' in navigator) {
                     window.addEventListener('load', () => {
                         navigator.serviceWorker.register('./sw.js').catch(e => console.error(e));
@@ -266,41 +266,36 @@
                 document.getElementById('fixed-action-bar').innerHTML = '';
             },
 
-            // VIEWS
-renderDashboard: async () => {
-    app.clearFixedActions();
-    const main = document.getElementById('main-content');
-    
-    // 1. Maak het hoofdscherm leeg en plaats het template
-    main.innerHTML = ''; 
-    const tpl = document.getElementById('tpl-dashboard').content.cloneNode(true);
-    const savedContainer = tpl.getElementById('saved-list-container');
-    const emptyState = tpl.getElementById('empty-state');
-    
-    // 2. Zorg dat de container echt leeg is
-    savedContainer.innerHTML = ''; 
+            renderDashboard: async () => {
+                app.clearFixedActions();
+                const main = document.getElementById('main-content');
+                main.innerHTML = '';
+                
+                const tpl = document.getElementById('tpl-dashboard').content.cloneNode(true);
+                const savedContainer = tpl.getElementById('saved-list-container');
+                const emptyState = tpl.getElementById('empty-state');
+                
+                savedContainer.innerHTML = ''; 
 
-    document.getElementById('header-title').innerText = "SuperLijst";
-    document.getElementById('header-actions').innerHTML = `<button onclick="app.renderStats()" class="text-gray-400 hover:text-white transition"><i class="fa-solid fa-calendar-days text-xl"></i></button>`;
-    
-    try {
-        const lists = await DataService.getLists();
-        if (lists.length === 0) {
-            emptyState.classList.remove('hidden');
-        } else {
-            // Sorteer eventueel op naam zodat ze niet verspringen
-            lists.sort((a, b) => a.data.name.localeCompare(b.data.name));
-            
-            lists.forEach(item => {
-                savedContainer.appendChild(app.createListCard(item, true));
-            });
-        }
-    } catch (e) {
-        console.error("Dashboard error:", e);
-    }
+                document.getElementById('header-title').innerText = "SuperLijst";
+                document.getElementById('header-actions').innerHTML = `<button onclick="app.renderStats()" class="text-gray-400 hover:text-white transition"><i class="fa-solid fa-calendar-days text-xl"></i></button>`;
+                
+                try {
+                    const lists = await DataService.getLists();
+                    if (lists.length === 0) {
+                        emptyState.classList.remove('hidden');
+                    } else {
+                        lists.sort((a, b) => a.data.name.localeCompare(b.data.name));
+                        lists.forEach(item => {
+                            savedContainer.appendChild(app.createListCard(item, true));
+                        });
+                    }
+                } catch (e) {
+                    console.error(e);
+                }
 
-    main.appendChild(tpl);
-},
+                main.appendChild(tpl);
+            },
 
             createListCard: (item, isSaved) => {
                 const div = document.createElement('div');
@@ -334,22 +329,24 @@ renderDashboard: async () => {
             },
 
             startEdit: (data, id = null) => {
+                // Zorg voor een schone kopie van de data
                 app.currentList = { 
-                    ...data, 
-                    _id: id || data._id, 
-                    id: id || data._id,
-                    items: Array.isArray(data.items) ? [...data.items] : []
+                    name: data.name || '',
+                    items: Array.isArray(data.items) ? [...data.items] : [],
+                    _id: id || data._id || null
                 };
                 app.renderEditor();
             },
 
             startEmpty: () => {
-                app.currentList = { name: '', items: [], id: null, _id: null };
+                app.currentList = { name: '', items: [], _id: null };
                 app.renderEditor();
             },
 
             renderEditor: () => {
                 const main = document.getElementById('main-content');
+                main.innerHTML = '';
+                
                 const tpl = document.getElementById('tpl-editor').content.cloneNode(true);
                 const nameInput = tpl.getElementById('list-name-input');
                 nameInput.value = app.currentList.name;
@@ -365,7 +362,6 @@ renderDashboard: async () => {
 
                 document.getElementById('header-title').innerText = "Bewerken";
                 document.getElementById('header-actions').innerHTML = '';
-                main.innerHTML = '';
                 main.appendChild(tpl);
 
                 const actionsTpl = document.getElementById('tpl-editor-actions').content.cloneNode(true);
@@ -400,12 +396,12 @@ renderDashboard: async () => {
                 if (!app.currentList.name) app.currentList.name = "Naamloze lijst";
                 try {
                     const saved = await DataService.saveList(app.currentList);
+                    // Update het ID voor het geval het een nieuwe lijst was
                     if (saved && saved._id) {
                         app.currentList._id = saved._id;
-                        app.currentList.id = saved._id;
                     }
-                    app.showToast("Lijst opgeslagen");
-                    app.renderDashboard();
+                    app.showToast("Opgeslagen");
+                    setTimeout(() => app.renderDashboard(), 150);
                 } catch (e) {
                     app.showToast("Opslaan mislukt", "danger");
                 }
@@ -414,14 +410,13 @@ renderDashboard: async () => {
             saveAndShop: async () => {
                 if (!app.currentList.name) app.currentList.name = "Mijn lijst";
                 if (app.currentList.items.length === 0) {
-                    app.showToast("Voeg eerst producten toe!", "danger");
+                    app.showToast("Lijst is leeg!", "danger");
                     return;
                 }
                 try {
                     const saved = await DataService.saveList(app.currentList);
                     if (saved && saved._id) {
                         app.currentList._id = saved._id;
-                        app.currentList.id = saved._id;
                     }
                     app.shoppingList = app.currentList.items.map(i => ({ ...i, done: false }));
                     app.renderShopping();
@@ -433,6 +428,8 @@ renderDashboard: async () => {
             renderShopping: () => {
                 app.clearFixedActions();
                 const main = document.getElementById('main-content');
+                main.innerHTML = '';
+                
                 const tpl = document.getElementById('tpl-shopping').content.cloneNode(true);
                 tpl.getElementById('shopping-title').innerText = app.currentList.name;
                 
@@ -454,7 +451,6 @@ renderDashboard: async () => {
                 });
 
                 document.getElementById('header-title').innerText = "Winkelen";
-                main.innerHTML = '';
                 main.appendChild(tpl);
                 app.updateProgress();
             },
@@ -478,6 +474,8 @@ renderDashboard: async () => {
             renderStats: async () => {
                 app.clearFixedActions();
                 const main = document.getElementById('main-content');
+                main.innerHTML = '';
+                
                 const tpl = document.getElementById('tpl-stats').content.cloneNode(true);
                 
                 const year = app.statDate.getFullYear();
@@ -495,19 +493,16 @@ renderDashboard: async () => {
 
                 const daysContainer = tpl.getElementById('calendar-days');
                 const daysInMonth = new Date(year, month + 1, 0).getDate();
-                
-                // Kalender opbouw
                 for (let day = 1; day <= daysInMonth; day++) {
                     const count = monthHistory.filter(h => new Date(h.date).getDate() === day).length;
                     const div = document.createElement('div');
-                    div.className = `aspect-square rounded-lg flex flex-col items-center justify-center text-sm border ${count > 0 ? 'bg-emerald-500/20 border-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-dark-900 border-gray-800 text-gray-500'}`;
+                    div.className = `aspect-square rounded-lg flex flex-col items-center justify-center text-sm border ${count > 0 ? 'bg-emerald-500/20 border-emerald-500 text-white' : 'bg-dark-900 border-gray-800 text-gray-500'}`;
                     div.innerHTML = `<span>${day}</span>${count > 0 ? `<span class="text-[9px] text-emerald-400 font-bold">+${count}</span>` : ''}`;
                     daysContainer.appendChild(div);
                 }
 
                 document.getElementById('header-title').innerText = "Statistieken";
                 document.getElementById('header-actions').innerHTML = `<button onclick="app.renderDashboard()" class="text-gray-400 hover:text-white transition"><i class="fa-solid fa-house"></i></button>`;
-                main.innerHTML = '';
                 main.appendChild(tpl);
             },
 
