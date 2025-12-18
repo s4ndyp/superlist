@@ -102,4 +102,19 @@ export default class DataGateway {
     });
     return this._handleResponse(response);
   }
+
+
+
+/**
+   * NIEUW: Wist de gehele collectie voor deze client.
+   * Stuurt een DELETE verzoek naar het collectie-endpoint zonder ID.
+   */
+  async clearCollection(collectionName) {
+    const fullPath = this._getPrefixedName(collectionName);
+    const response = await fetch(`${this.baseUrl}/api/${fullPath}`, {
+      method: 'DELETE',
+      headers: this._getHeaders()
+    });
+    return this._handleResponse(response);
+  }
 }

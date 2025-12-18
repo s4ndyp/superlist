@@ -121,6 +121,26 @@ export default class OfflineManager {
   }
 
   /**
+   * Wist de gehele collectie lokaal en zet een opdracht in de wachtrij voor de server.
+   * @param {string} collectionName - De naam van de collectie (zonder prefix).
+   */
+  async clearSmartCollection(collectionName) {
+    // 1. Directe visuele feedback: Wis alle lokale data voor deze collectie in Dexie
+    await this.db.data.where({ collection: collectionName }).delete();
+
+    // 2. Voeg de CLEAR actie toe aan de outbox voor synchronisatie met de MongoDB server
+    await this.db.outbox.add({
+      action: 'CLEAR',
+      collection: collectionName,
+      payload: null,
+      timestamp: Date.now()
+    });
+
+    // 3. Probeer de wijziging direct naar de server te sturen
+    this.syncOutbox();
+  }
+
+  /**
    * Verwerkt de wachtrij van wijzigingen en stuurt deze naar de API Gateway.
    */
   async syncOutbox() {
@@ -145,6 +165,10 @@ export default class OfflineManager {
         } 
         else if (item.action === 'DELETE') {
           await this.gateway.deleteDocument(item.collection, item.payload._id);
+        }
+        else if (item.action === 'CLEAR') {
+          // Roep de clearCollection methode aan van de DataGateway
+          await this.gateway.clearCollection(item.collection);
         }
 
         // Verwijder uit de wachtrij bij succes
