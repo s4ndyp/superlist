@@ -1,16 +1,16 @@
 /**
- * OfflineManager V6 - Universele Save (POST/PUT via saveDocument)
+ * OfflineManager V7 - De "Snapshot" Editie
+ * Past het advies toe: Gebruikt een onafhankelijk record voor de outbox.
  */
 import DataGateway from './datagateway.js';
 
 export default class OfflineManager {
   constructor(baseUrl, clientId, appName) {
     this.appName = appName;
-    // De gateway heeft een smart saveDocument functie
     this.gateway = new DataGateway(baseUrl, clientId, appName);
     this.db = new Dexie(`AppCache_${appName}_${clientId}`);
     
-    this.db.version(7).stores({ 
+    this.db.version(8).stores({ 
       data: "++id, collection, _id", 
       outbox: "++id, action, collection, payload"
     });
@@ -26,17 +26,18 @@ export default class OfflineManager {
   }
 
   /**
-   * Slaat een document op. De gateway bepaalt of het POST of PUT is.
+   * Slaat een document op met een gegarandeerde snapshot voor de outbox.
    */
   async saveSmartDocument(collectionName, data) {
+    // STAP 1: Maak een harde kopie (snapshot) van de data.
+    // Dit voorkomt dat wijzigingen in de UI later de outbox-payload verpesten.
     const record = JSON.parse(JSON.stringify(data));
-    const hasServerId = record._id && typeof record._id === 'string' && record._id.length > 5;
     
-    // We houden de action in de outbox nog even bij voor logging/debugging,
-    // maar we gebruiken voor beide saveDocument.
+    // Bepaal de actie op basis van het aanwezige _id in het record
+    const hasServerId = record._id && typeof record._id === 'string' && record._id.length > 5;
     const action = hasServerId ? 'PUT' : 'POST';
 
-    // 1. Optimistic UI: Update lokale cache
+    // STAP 2: Optimistic UI (Lokaal in Dexie)
     if (hasServerId) {
       const existing = await this.db.data
         .where({ collection: collectionName, _id: record._id })
@@ -51,11 +52,12 @@ export default class OfflineManager {
       await this.db.data.add({ ...record, collection: collectionName });
     }
 
-    // 2. Outbox: Zet in de wachtrij
+    // STAP 3: Outbox vullen met het GEGEVENS-RECORD (de snapshot)
+    // Hierdoor is het _id gegarandeerd aanwezig voor de gateway.saveDocument()
     await this.db.outbox.add({
       action: action,
       collection: collectionName,
-      payload: record,
+      payload: record, // <--- Dit is de cruciale fix
       timestamp: Date.now()
     });
 
@@ -67,7 +69,7 @@ export default class OfflineManager {
   }
 
   /**
-   * Synchroniseert outbox. Gebruikt gateway.saveDocument voor zowel POST als PUT.
+   * Verwerkt de outbox.
    */
   async syncOutbox() {
     if (!navigator.onLine) return;
@@ -77,36 +79,28 @@ export default class OfflineManager {
 
     for (const item of items) {
       try {
-        let finalPayload = JSON.parse(JSON.stringify(item.payload));
+        // Gebruik de payload direct uit de outbox (dit is ons 'record')
+        let finalPayload = item.payload;
 
-        // Binaire conversie voor afbeeldingen/bestanden
+        // Binaire conversie indien nodig
         for (const key in finalPayload) {
           if (finalPayload[key] && (finalPayload[key] instanceof File || finalPayload[key] instanceof Blob)) {
             finalPayload[key] = await this._blobToBase64(finalPayload[key]);
           }
         }
 
-        // POST en PUT gebruiken nu beide gateway.saveDocument
-        if (item.action === 'POST' || item.action === 'PUT') {
-          const response = await this.gateway.saveDocument(item.collection, finalPayload);
-          
-          // Als het een nieuwe POST was, koppelen we het nieuwe _id aan de lokale cache
-          if (item.action === 'POST' && response && response._id) {
-            await this._linkServerId(item.collection, item.payload, response._id);
-          }
-        } 
-        else if (item.action === 'DELETE') {
-          await this.gateway.deleteDocument(item.collection, item.payload._id);
-        }
-        else if (item.action === 'CLEAR') {
-          await this.gateway.clearCollection(item.collection);
+        // De Gateway.saveDocument detecteert nu feilloos PUT of POST dankzij het record
+        const response = await this.gateway.saveDocument(item.collection, finalPayload);
+        
+        // Koppel ID als het een nieuwe lijst was
+        if (item.action === 'POST' && response && response._id) {
+          await this._linkServerId(item.collection, item.payload, response._id);
         }
 
-        // Verwijder de actie uit de outbox na succesvolle gateway aanroep
         await this.db.outbox.delete(item.id);
 
       } catch (err) {
-        console.error(`[Sync Fout] Fout bij ${item.action} in ${item.collection}:`, err);
+        console.error(`[Sync Fout] Mislukt in ${item.collection}:`, err);
         continue; 
       }
     }
