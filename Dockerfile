@@ -1,21 +1,8 @@
-# Gebruik een lichte Node image
-FROM node:18-alpine
+# Een super lichtgewicht webserver
+FROM nginx:alpine
 
-# Werkmap in de container
-WORKDIR /app
+# Kopieer de html file naar de standaard nginx map
+COPY *.* /usr/share/nginx/html/
 
-# Kopieer package bestanden en installeer dependencies
-COPY package.json ./
-RUN npm install
-
-# Kopieer de rest van de broncode
-COPY . .
-
-# Maak een map voor de database data
-RUN mkdir -p /app/data
-
-# Stel de poort in
-EXPOSE 3000
-
-# Start commando
-CMD ["npm", "start"]
+# Nginx draait standaard op poort 80
+EXPOSE 80
