@@ -204,6 +204,7 @@
             currentList: null,
             shoppingList: [],
             statDate: new Date(),
+            deleteTimeout: null,
 
             init: async () => {
                 await app.renderDashboard();
@@ -322,20 +323,24 @@
                 nameInput.oninput = (e) => app.currentList.name = e.target.value;
                 
                 const ul = tpl.getElementById('editor-items');
-                app.currentList.items.forEach((item, idx) => {
+                // Filter out null/undefined items and ensure they have required properties
+                const validItems = app.currentList.items.filter(item => item && typeof item.name === 'string');
+                validItems.forEach((item, idx) => {
                     const li = document.createElement('li');
                     li.className = "bg-dark-800 p-3 rounded-xl flex justify-between items-center border border-gray-700";
                     const button = document.createElement('button');
                     button.className = "text-gray-500 hover:text-red-400 touch-manipulation";
                     button.innerHTML = '<i class="fa-solid fa-xmark"></i>';
-                    button.onclick = (e) => {
+                    button.addEventListener('click', (e) => {
                         e.stopPropagation();
+                        e.preventDefault();
                         app.removeItem(idx);
-                    };
-                    button.ontouchstart = (e) => {
+                    });
+                    button.addEventListener('touchstart', (e) => {
                         e.stopPropagation();
+                        e.preventDefault();
                         app.removeItem(idx);
-                    };
+                    }, { passive: false });
                     li.innerHTML = `<span>${item.name}</span>`;
                     li.appendChild(button);
                     ul.appendChild(li);
@@ -368,9 +373,27 @@
                 app.renderEditor();
             },
 
-            removeItem: (index) => {
-                app.currentList.items.splice(index, 1);
+            removeItem: (filteredIndex) => {
+                // Prevent multiple rapid deletions
+                if (app.deleteTimeout) return;
+
+                // Find the actual item in the original array
+                const validItems = app.currentList.items.filter(item => item && typeof item.name === 'string');
+                const itemToRemove = validItems[filteredIndex];
+
+                if (itemToRemove) {
+                    const originalIndex = app.currentList.items.indexOf(itemToRemove);
+                    if (originalIndex !== -1) {
+                        app.currentList.items.splice(originalIndex, 1);
+                    }
+                }
+
                 app.renderEditor();
+
+                // Add small delay to prevent accidental multiple deletions
+                app.deleteTimeout = setTimeout(() => {
+                    app.deleteTimeout = null;
+                }, 300);
             },
 
             saveOnly: async () => {
