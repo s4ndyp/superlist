@@ -1,0 +1,16 @@
+services:
+  app:
+    # Haal de image op van GitHub Container Registry
+    # VERVANG: jouw-gebruikersnaam en jouw-repo-naam (alles in kleine letters)
+    image: ghcr.io/s4ndyp/supermarkey:latest
+    
+    # Geef de container een vaste naam (makkelijker voor logs/beheer)
+    container_name: supermarkey-container
+    
+    # Map poort 8080 van je PC naar poort 80 van de container
+    # Je kunt de app bereiken op http://localhost:8080
+    ports:
+      - "7107:80"
+      
+    # Herstart de container automatisch als hij crasht of als Docker herstart
+    restart: unless-stopped
